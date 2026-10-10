@@ -6,6 +6,6 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY server ./server
 COPY examples ./examples
-RUN pip install --no-cache-dir '.[web]'
+RUN pip install --no-cache-dir '.[web,sources]'
 EXPOSE 8000
 CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8000"]

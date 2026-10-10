@@ -14,7 +14,7 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY server ./server
 COPY examples ./examples
-RUN pip install --no-cache-dir '.[web]'
+RUN pip install --no-cache-dir '.[web,sources]'
 COPY --from=web /web/dist ./web
 EXPOSE 8000
 # Hosts set $PORT; they also terminate HTTPS in front of the app, hence --proxy-headers.

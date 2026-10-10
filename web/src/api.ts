@@ -15,6 +15,8 @@ export type Report = {
   passed_checks: string[]; affected_consumers: string[]; schema_changed: boolean; data_file: string
   ai_note?: string | null; markdown?: string; triage?: Triage | null
   charts?: Record<string, ColumnChart>; fix?: Fix | null
+  source?: { id: string; name: string; kind: string; rows_pulled: number; mapped: boolean; steps: string[]; problems: string[] }
+  unified?: { sources: Array<{ name: string; kind: string; rows: number; error: string | null; problems: string[] }> }
 }
 export type ColumnChart = {
   null_rate: [number, number | null]
@@ -27,6 +29,17 @@ export type Fix = {
   before: Counts; after: Counts & { remaining: string[] }; rows: { before: number; after: number }
   file_name: string; by?: string; at?: string
 }
+export type Investigation = { triage: Triage | null; fix: Fix | null; errors: Partial<Record<'triage' | 'fix', string>> }
+export type SourceField = { name: string; label: string; placeholder: string; secret: boolean; required: boolean; multiline: boolean; help: string }
+export type SourceKind = { kind: string; label: string; group: string; description: string; fields: SourceField[]; available: boolean; missing_packages: string[] }
+export type Step = { operation: string; args: Record<string, unknown>; reason: string; effect?: string }
+export type Mapping = Omit<Fix, 'file_name' | 'operations'> & { operations: Step[]; automatic_steps: number; source_columns: string[]; model: string | null; at?: string }
+export type Source = {
+  id: string; name: string; kind: string; settings: Record<string, string> & { saved_secrets?: string[] }
+  status: 'standard' | 'mapped' | 'needs_mapping'; recipe: Step[]; proposal: Mapping | null
+  last_pulled_at: string | null; last_run_id: string | null; created_by: string | null; created_at: string
+}
+export type SourceForm = { name: string; kind: string; settings: Record<string, string> }
 export type Triage = {
   headline: string; verdict: 'block' | 'investigate' | 'safe_to_ship'; verdict_reason: string
   root_causes: Array<{ hypothesis: string; confidence: 'low' | 'medium' | 'high'; evidence: string }>
@@ -78,7 +91,21 @@ export const api = {
   users: () => request<User[]>('GET', '/api/users'),
   addUser: (u: { name: string; email: string; password: string; role: User['role'] }) => request<User>('POST', '/api/users', u),
   removeUser: (id: string) => request('DELETE', `/api/users/${id}`),
-  fix: (id: string, run: string) => request<Fix>('POST', `/api/projects/${id}/runs/${run}/fix`),
+  investigate: (id: string, run: string) => request<Investigation>('POST', `/api/projects/${id}/runs/${run}/investigate`),
+  runDataUrl: (id: string, run: string) => `${API}/api/projects/${id}/runs/${run}/data`,
+  sourceCatalog: () => request<SourceKind[]>('GET', '/api/sources/catalog'),
+  sources: (id: string) => request<Source[]>('GET', `/api/projects/${id}/sources`),
+  testSource: (id: string, kind: string, settings: Record<string, string>, source_id?: string) =>
+    request<{ ok: boolean; message: string }>('POST', `/api/projects/${id}/sources/test`, { kind, settings, source_id }),
+  addSource: (id: string, form: SourceForm) => request<Source>('POST', `/api/projects/${id}/sources`, form),
+  editSource: (id: string, sid: string, form: SourceForm) => request<Source>('PUT', `/api/projects/${id}/sources/${sid}`, form),
+  removeSource: (id: string, sid: string) => request('DELETE', `/api/projects/${id}/sources/${sid}`),
+  mapSource: (id: string, sid: string) => request<Mapping>('POST', `/api/projects/${id}/sources/${sid}/map`),
+  discardMapping: (id: string, sid: string) => request<Source>('DELETE', `/api/projects/${id}/sources/${sid}/proposal`),
+  saveRecipe: (id: string, sid: string, operations: Step[]) => request<Source>('PUT', `/api/projects/${id}/sources/${sid}/recipe`, { operations }),
+  pullSource: (id: string, sid: string, role: 'baseline' | 'candidate') =>
+    request<Report & { run_id?: string }>('POST', `/api/projects/${id}/sources/${sid}/pull`, { role }),
+  unify: (id: string) => request<Report & { run_id: string }>('POST', `/api/projects/${id}/unify`),
   checkFixed: (id: string, run: string) => request<Report & { run_id: string }>('POST', `/api/projects/${id}/runs/${run}/fixed/check`),
   fixedUrl: (id: string, run: string) => `${API}/api/projects/${id}/runs/${run}/fixed`,
   review: (id: string, run: string, status: ReviewStatus) => request<Review>('PUT', `/api/projects/${id}/runs/${run}/review`, { status }),
@@ -89,7 +116,6 @@ export const api = {
   seed: () => request<Created>('POST', '/api/demo/seed'),
   remove: (id: string) => request('DELETE', `/api/projects/${id}`),
   saveRules: (id: string, config_yaml: string) => request('PUT', `/api/projects/${id}/config`, { config_yaml }),
-  triage: (id: string, run: string) => request<Triage>('POST', `/api/projects/${id}/runs/${run}/triage`),
   draftRules: (id: string, req: string, config_yaml: string) =>
     request<RulesDraft>('POST', `/api/projects/${id}/rules/draft`, { request: req, config_yaml }),
   suggestions: (id: string) => request<{ yaml: string }>('GET', `/api/projects/${id}/suggestions`),

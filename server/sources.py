@@ -1,0 +1,239 @@
+"""Data sources: connect databases and links to a project, map each onto the standard format, pull, and unify.
+
+Secrets (passwords, connection URLs) stay in the server's database and are never sent back to the browser.
+"""
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+from typing import Any, Dict, Literal, Optional
+
+import pandas as pd
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from datapulse.errors import DataPulseError
+from datapulse.sources import catalog, clean_settings, fetch_source, public_settings, try_connection
+from datapulse.unify import SOURCE_COLUMN, apply_recipe, combine, propose_mapping, validate_recipe
+
+from .core import ai_call, dataset_rows, loads, project_config, project_row, run_check, save_baseline
+from .db import connect, now_iso, upload_dir
+
+router = APIRouter(prefix="/api")
+
+
+class SourceForm(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    kind: str = Field(min_length=1, max_length=40)
+    settings: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TestForm(BaseModel):
+    kind: str
+    settings: Dict[str, Any] = Field(default_factory=dict)
+    source_id: Optional[str] = None  # testing an edit: blank secrets fall back to the saved ones
+
+
+class Pull(BaseModel):
+    role: Literal["candidate", "baseline"] = "candidate"
+
+
+class Recipe(BaseModel):
+    operations: list = Field(max_length=100)
+
+
+def _source(project_id: str, source_id: str) -> sqlite3.Row:
+    with connect() as db:
+        row = db.execute("SELECT * FROM sources WHERE id = ? AND project_id = ?", (source_id, project_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Source not found")
+    return row
+
+
+def _public(row: sqlite3.Row) -> Dict[str, Any]:
+    recipe = loads(row["recipe_json"])
+    return {
+        "id": row["id"], "name": row["name"], "kind": row["kind"],
+        "settings": public_settings(row["kind"], json.loads(row["settings_json"])),
+        "status": "standard" if row["is_standard"] else "mapped" if recipe is not None else "needs_mapping",
+        "recipe": recipe or [], "proposal": loads(row["proposal_json"]),
+        "last_pulled_at": row["last_pulled_at"], "last_run_id": row["last_run_id"],
+        "created_by": row["created_by"], "created_at": row["created_at"],
+    }
+
+
+def _fail(exc: DataPulseError) -> HTTPException:
+    return HTTPException(400, str(exc))
+
+
+def _fetch(row: sqlite3.Row) -> pd.DataFrame:
+    try:
+        return fetch_source(row["kind"], json.loads(row["settings_json"]), row["name"])
+    except DataPulseError as exc:
+        raise _fail(exc) from exc
+
+
+def _store(df: pd.DataFrame) -> Any:
+    path = upload_dir() / f"{uuid.uuid4().hex}.csv"
+    df.to_csv(path, index=False)
+    return path
+
+
+def _update(source_id: str, **values) -> None:
+    with connect() as db:
+        db.execute(f"UPDATE sources SET {', '.join(f'{k} = ?' for k in values)} WHERE id = ?",
+                   (*values.values(), source_id))
+
+
+@router.get("/sources/catalog")
+def source_catalog() -> list:
+    return catalog()
+
+
+@router.get("/projects/{project_id}/sources")
+def list_sources(project_id: str) -> list:
+    project_row(project_id)
+    with connect() as db:
+        rows = db.execute("SELECT * FROM sources WHERE project_id = ? ORDER BY created_at, rowid", (project_id,)).fetchall()
+    return [_public(r) for r in rows]
+
+
+@router.post("/projects/{project_id}/sources/test")
+def test_connection(project_id: str, payload: TestForm) -> dict:
+    """Try a connection without saving it. Failures are a normal answer here, not an error."""
+    project_row(project_id)
+    previous = None
+    if payload.source_id:
+        previous = json.loads(_source(project_id, payload.source_id)["settings_json"])
+    try:
+        return {"ok": True, "message": try_connection(payload.kind, clean_settings(payload.kind, payload.settings, previous))}
+    except DataPulseError as exc:
+        return {"ok": False, "message": str(exc)}
+
+
+@router.post("/projects/{project_id}/sources")
+def add_source(project_id: str, payload: SourceForm, request: Request) -> dict:
+    project_row(project_id)
+    try:
+        settings = clean_settings(payload.kind, payload.settings)
+    except DataPulseError as exc:
+        raise _fail(exc) from exc
+    source_id = uuid.uuid4().hex[:12]
+    with connect() as db:
+        db.execute("INSERT INTO sources (id, project_id, name, kind, settings_json, created_by, created_at) "
+                   "VALUES (?, ?, ?, ?, ?, ?, ?)", (source_id, project_id, payload.name.strip(), payload.kind,
+                                                    json.dumps(settings), request.state.user["name"], now_iso()))
+    return _public(_source(project_id, source_id))
+
+
+@router.put("/projects/{project_id}/sources/{source_id}")
+def edit_source(project_id: str, source_id: str, payload: SourceForm) -> dict:
+    row = _source(project_id, source_id)
+    if payload.kind != row["kind"]:
+        raise HTTPException(422, "A source's type can't change; add a new source instead")
+    try:
+        settings = clean_settings(row["kind"], payload.settings, json.loads(row["settings_json"]))
+    except DataPulseError as exc:
+        raise _fail(exc) from exc
+    _update(source_id, name=payload.name.strip(), settings_json=json.dumps(settings))
+    return _public(_source(project_id, source_id))
+
+
+@router.delete("/projects/{project_id}/sources/{source_id}")
+def delete_source(project_id: str, source_id: str) -> dict:
+    _source(project_id, source_id)
+    with connect() as db:
+        db.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+    return {"deleted": True}
+
+
+@router.post("/projects/{project_id}/sources/{source_id}/map")
+def map_source(project_id: str, source_id: str) -> dict:
+    """Propose a recipe that turns this source into the standard format. Saved as a proposal for review."""
+    project, row = project_row(project_id), _source(project_id, source_id)
+    if not project["baseline_json"]:
+        raise HTTPException(409, "Set the standard format first: pull one source as the baseline")
+    df = _fetch(row)
+    proposal = ai_call(lambda: propose_mapping(df, json.loads(project["baseline_json"]),
+                                               project_config(project["config_yaml"]),
+                                               reference=dataset_rows(project["baseline_dataset_id"])))
+    proposal["at"] = now_iso()
+    _update(source_id, proposal_json=json.dumps(proposal))
+    return proposal
+
+
+@router.delete("/projects/{project_id}/sources/{source_id}/proposal")
+def discard_proposal(project_id: str, source_id: str) -> dict:
+    _source(project_id, source_id)
+    _update(source_id, proposal_json=None)
+    return _public(_source(project_id, source_id))
+
+
+@router.put("/projects/{project_id}/sources/{source_id}/recipe")
+def save_recipe(project_id: str, source_id: str, payload: Recipe) -> dict:
+    """Approve a recipe (usually the reviewed proposal). Every later pull replays it without AI."""
+    _source(project_id, source_id)
+    try:
+        recipe = validate_recipe(payload.operations)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _update(source_id, recipe_json=json.dumps(recipe), proposal_json=None)
+    return _public(_source(project_id, source_id))
+
+
+@router.post("/projects/{project_id}/sources/{source_id}/pull")
+def pull_source(project_id: str, source_id: str, payload: Pull, request: Request) -> dict:
+    """Pull the source now. As the baseline it defines the standard format; otherwise its recipe runs and the
+    result is checked like an upload."""
+    project, row = project_row(project_id), _source(project_id, source_id)
+    if payload.role == "candidate" and not project["baseline_json"]:
+        raise HTTPException(409, "Set the standard format first: pull one source as the baseline")
+    df = _fetch(row)
+    actor = request.state.user["name"]
+    if payload.role == "baseline":
+        result = save_baseline(project, row["name"], _store(df), df)
+        with connect() as db:
+            db.execute("UPDATE sources SET is_standard = 0 WHERE project_id = ?", (project_id,))
+        _update(source_id, is_standard=1, recipe_json=json.dumps([]), proposal_json=None, last_pulled_at=now_iso())
+        return result
+    recipe = loads(row["recipe_json"])
+    mapped, effects, problems = apply_recipe(df, json.loads(project["baseline_json"])["profile"], recipe or [])
+    extra = {"source": {"id": row["id"], "name": row["name"], "kind": row["kind"], "rows_pulled": len(df),
+                        "mapped": recipe is not None or bool(row["is_standard"]), "steps": effects, "problems": problems}}
+    doc = run_check(project, row["name"], _store(mapped), mapped, False, actor, extra)
+    _update(source_id, last_pulled_at=now_iso(), last_run_id=doc["run_id"])
+    return doc
+
+
+@router.post("/projects/{project_id}/unify")
+def unify(project_id: str, request: Request) -> dict:
+    """Pull every mapped source, convert each to the standard format, combine them and check the result."""
+    project = project_row(project_id)
+    if not project["baseline_json"]:
+        raise HTTPException(409, "Set the standard format first: pull one source as the baseline")
+    profile = json.loads(project["baseline_json"])["profile"]
+    with connect() as db:
+        rows = db.execute("SELECT * FROM sources WHERE project_id = ? AND (recipe_json IS NOT NULL OR is_standard = 1) "
+                          "ORDER BY created_at, rowid", (project_id,)).fetchall()
+    if not rows:
+        raise HTTPException(409, "No mapped sources yet. Map at least one source first")
+    frames, report = {}, []
+    for row in rows:
+        try:
+            df = fetch_source(row["kind"], json.loads(row["settings_json"]), row["name"])
+        except DataPulseError as exc:
+            report.append({"name": row["name"], "kind": row["kind"], "rows": 0, "error": str(exc), "problems": []})
+            continue
+        mapped, _, problems = apply_recipe(df, profile, loads(row["recipe_json"]) or [])
+        label = row["name"] if row["name"] not in frames else f"{row['name']} ({row['id']})"
+        frames[label] = mapped
+        _update(row["id"], last_pulled_at=now_iso())
+        report.append({"name": row["name"], "kind": row["kind"], "rows": len(mapped), "error": None, "problems": problems})
+    if not frames:
+        raise HTTPException(502, "None of the sources could be read: "
+                            + "; ".join(f"{r['name']}: {r['error']}" for r in report))
+    combined = combine(frames, list(profile["columns"]))
+    name = f"Unified data ({len(frames)} source{'s' if len(frames) != 1 else ''})"
+    return run_check(project, name, _store(combined), combined, False, request.state.user["name"],
+                     {"unified": {"sources": report}}, checked=combined.drop(columns=[SOURCE_COLUMN]), combined=True)

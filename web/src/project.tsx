@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, API_ORIGIN, fmtDate, plural, runTone, timeAgo, SEVERITIES, TONE_LABEL,
-  type Issue, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft, type ReviewStatus, type Fix, type ColumnChart } from './api'
+  type Issue, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft, type ReviewStatus, type ColumnChart } from './api'
 import type { Route } from './App'
 import { BeforeAfter, NullRates } from './charts'
+import { SourceNote, SourcesTab, UnifiedNote } from './sources'
 import { Icon, type IconName } from './icons'
 import { CodeBlock, copyText, Dropzone, Empty, Spinner, useAction, useNotify } from './ui'
 
-export const TABS = ['checks', 'baseline', 'rules', 'api'] as const
+export const TABS = ['checks', 'sources', 'baseline', 'rules', 'api'] as const
 export type Tab = typeof TABS[number]
-const TAB_LABEL: Record<Tab, string> = { checks: 'Checks', baseline: 'Baseline', rules: 'Rules', api: 'Send data' }
+const TAB_LABEL: Record<Tab, string> = { checks: 'Checks', sources: 'Sources', baseline: 'Baseline', rules: 'Rules', api: 'Send data' }
 const SEVERITY_ICON: Record<Severity, IconName> = { critical: 'alert', warning: 'flag', info: 'info' }
 const FAIL_ON: Record<string, string> = {
   critical: 'Fails on critical issues', warning: 'Fails on warnings or worse', info: 'Fails on any issue', never: 'Never fails',
@@ -69,6 +70,7 @@ export function ProjectView({ route, go, onChanged, apiKey, dismissKey, ai }: Pr
     </nav>
 
     {route.tab === 'checks' && <ChecksTab detail={detail} runId={route.run} select={run => go({ ...route, run })} changed={changed} ai={ai} />}
+    {route.tab === 'sources' && <SourcesTab detail={detail} changed={changed} ai={ai} openRun={run => go({ id: detail.id, tab: 'checks', run })} />}
     {route.tab === 'baseline' && <BaselineTab detail={detail} changed={changed} />}
     {route.tab === 'rules' && <RulesTab detail={detail} draft={draft} setDraft={setDraft} dirty={dirty} changed={changed} ai={ai} />}
     {route.tab === 'api' && <ApiTab detail={detail} apiKey={apiKey} />}
@@ -151,8 +153,9 @@ function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectI
     </div>
 
     {report.issues.length > 0 && <ReviewBar run={run} projectId={projectId} changed={changed} />}
-    {report.issues.length > 0 && <TriageSection run={run} projectId={projectId} ai={ai} changed={changed} />}
-    {report.issues.length > 0 && <FixSection run={run} projectId={projectId} ai={ai} changed={changed} select={select} />}
+    {report.source && <SourceNote projectId={projectId} run={run} />}
+    {report.unified && <UnifiedNote projectId={projectId} run={run} />}
+    {report.issues.length > 0 && <InvestigateSection run={run} projectId={projectId} ai={ai} changed={changed} select={select} />}
 
     {counts.length > 1 && <div className="filters">
       <button className={!filter ? 'on' : ''} onClick={() => setFilter(null)}>All {report.issues.length}</button>
@@ -216,105 +219,88 @@ function IssueChart({ issue, charts }: { issue: Issue; charts?: Record<string, C
   return null
 }
 
-/* ---------- AI repair agent ---------- */
-
-function FixSection({ run, projectId, ai, changed, select }:
-  { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; select: (id?: string) => void }) {
-  const notify = useNotify()
-  const [busy, act] = useAction()
-  const fix = run.report.fix
-  if (fix) return <FixPanel fix={fix} projectId={projectId} runId={run.id} busy={busy}
-    recheck={() => act('recheck', async () => {
-      const report = await api.checkFixed(projectId, run.id)
-      await changed(); select(report.run_id)
-      notify.ok(`Fixed file checked: ${plural(report.issues.length, 'issue')} left`)
-    })} />
-  return <div className="triage-cta fix-cta">
-    <span className="triage-icon"><Icon name="wrench" size={18} /></span>
-    <div>
-      <b>{busy ? 'The AI agent is repairing a copy…' : 'Let the AI fix what it safely can'}</b>
-      <small>{busy ? 'It applies repairs one at a time and re-checks after each. About 30–60 seconds.'
-        : ai ? 'Repairs a copy of this file (your original is never changed), then re-runs every check to prove it worked.'
-        : 'AI is off. Set ANTHROPIC_API_KEY on the server to turn it on.'}</small>
-    </div>
-    <button className="button primary" disabled={!ai || !!busy} onClick={() => act('fix', async () => { await api.fix(projectId, run.id); await changed() })}>
-      {busy ? <Spinner text="Repairing…" /> : <><Icon name="wrench" size={14} /> Fix with AI</>}
-    </button>
-  </div>
-}
-
-function FixPanel({ fix, projectId, runId, busy, recheck }: { fix: Fix; projectId: string; runId: string; busy: string | null; recheck: () => void }) {
-  return <section className="triage fix">
-    <header>
-      <span className="pill verdict clean"><Icon name="wrench" size={12} /> Repaired copy</span>
-      <small className="muted"><Icon name="sparkle" size={12} /> AI repair{fix.by && ` · requested by ${fix.by}`}</small>
-    </header>
-    <div className="fix-score">
-      <div><small>Issues</small><b>{fix.before.total} <span>→</span> {fix.after.total}</b></div>
-      <div><small>Critical</small><b>{fix.before.critical} <span>→</span> {fix.after.critical}</b></div>
-      <div><small>Rows</small><b>{fix.rows.before.toLocaleString()} <span>→</span> {fix.rows.after.toLocaleString()}</b></div>
-    </div>
-    <p>{fix.summary}</p>
-    {fix.operations.length > 0 && <><h4>What it changed</h4>
-      <ol className="causes">{fix.operations.map((op, i) => <li key={i}><span className="conf done">fixed</span>
-        <div><b>{op.effect}</b><small>{op.reason}</small></div></li>)}</ol></>}
-    {fix.not_fixed.length > 0 && <><h4>Left for a person</h4>
-      <ul className="notify">{fix.not_fixed.map((n, i) => <li key={i}><b>{n.issue}</b> {n.why}</li>)}</ul></>}
-    {fix.warnings.map((w, i) => <p key={i} className="note"><Icon name="info" size={13} /> {w}</p>)}
-    <div className="actions">
-      <a className="button primary" href={api.fixedUrl(projectId, runId)} download={fix.file_name}><Icon name="download" size={14} /> Download {fix.file_name}</a>
-      <button className="button outline" disabled={!!busy} onClick={recheck}>{busy === 'recheck' ? <Spinner text="Checking…" /> : 'Check the fixed file'}</button>
-    </div>
-  </section>
-}
-
-/* ---------- AI triage agent ---------- */
+/* ---------- Investigate with AI: diagnosis + repair in one pass ---------- */
 
 const VERDICT: Record<Triage['verdict'], { label: string; tone: string; icon: IconName }> = {
   block: { label: 'Block this batch', tone: 'failed', icon: 'alert' },
   investigate: { label: 'Investigate before shipping', tone: 'issues', icon: 'flag' },
   safe_to_ship: { label: 'Safe to ship', tone: 'clean', icon: 'check' },
 }
+const PART: Record<string, string> = { triage: 'The diagnosis', fix: 'The repair' }
 
-function TriageSection({ run, projectId, ai, changed }: { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown> }) {
+function InvestigateSection({ run, projectId, ai, changed, select }:
+  { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; select: (id?: string) => void }) {
+  const notify = useNotify()
   const [busy, act] = useAction()
-  const triage = run.report.triage
-  if (triage) return <TriagePanel triage={triage} />
-  return <div className="triage-cta">
+  const { triage, fix } = run.report
+  const investigate = () => act('investigate', async () => {
+    const result = await api.investigate(projectId, run.id)
+    await changed()
+    Object.entries(result.errors).forEach(([part, message]) => notify.fail(new Error(`${PART[part]} didn't finish: ${message}`)))
+  })
+  const recheck = () => act('recheck', async () => {
+    const report = await api.checkFixed(projectId, run.id)
+    await changed(); select(report.run_id)
+    notify.ok(`Fixed file checked: ${plural(report.issues.length, 'issue')} left`)
+  })
+  const button = <button className="button primary" disabled={!ai || !!busy} onClick={investigate}>
+    {busy === 'investigate' ? <Spinner text="Investigating…" /> : <><Icon name="sparkle" size={14} /> {triage || fix ? 'Finish the investigation' : 'Investigate with AI'}</>}
+  </button>
+
+  if (!triage && !fix) return <div className="triage-cta">
     <span className="triage-icon"><Icon name="sparkle" size={18} /></span>
     <div>
-      <b>{busy ? 'The AI agent is investigating…' : 'Let the AI agent triage this'}</b>
-      <small>{busy ? 'This takes about 30 seconds.'
-        : ai ? 'Finds the likely cause, whether to block, next steps and who to tell.'
+      <b>{busy ? 'Two AI agents are on it…' : 'Investigate with AI'}</b>
+      <small>{busy ? 'One finds the cause while the other repairs a copy. About a minute.'
+        : ai ? 'Finds what went wrong and who it affects, and repairs a copy of the file. Your original is never changed.'
         : 'AI is off. Set ANTHROPIC_API_KEY on the server to turn it on.'}</small>
     </div>
-    <button className="button primary" disabled={!ai || !!busy} onClick={() => act('triage', async () => { await api.triage(projectId, run.id); await changed() })}>
-      {busy ? <Spinner text="Investigating…" /> : <><Icon name="sparkle" size={14} /> Triage with AI</>}
-    </button>
+    {button}
   </div>
-}
 
-function TriagePanel({ triage: t }: { triage: Triage }) {
-  const v = VERDICT[t.verdict]
+  const v = triage && VERDICT[triage.verdict]
   return <section className="triage">
     <header>
-      <span className={`pill verdict ${v.tone}`}><Icon name={v.icon} size={12} /> {v.label}</span>
-      <small className="muted"><Icon name="sparkle" size={12} /> AI triage{t.by && ` · requested by ${t.by}`}</small>
+      {v ? <span className={`pill verdict ${v.tone}`}><Icon name={v.icon} size={12} /> {v.label}</span>
+        : <span className="pill verdict clean"><Icon name="wrench" size={12} /> Repaired copy</span>}
+      <small className="muted"><Icon name="sparkle" size={12} /> AI investigation{(triage?.by || fix?.by) && ` · requested by ${triage?.by || fix?.by}`}</small>
     </header>
-    <h3>{t.headline}</h3>
-    <p className="muted">{t.verdict_reason}</p>
-    {t.root_causes.length > 0 && <><h4>Likely causes</h4>
-      <ol className="causes">{t.root_causes.map((c, i) => <li key={i}><span className={`conf ${c.confidence}`}>{c.confidence}</span>
+    {triage && <><h3>{triage.headline}</h3><p className="muted">{triage.verdict_reason}</p></>}
+    {triage && triage.root_causes.length > 0 && <><h4>What went wrong</h4>
+      <ol className="causes">{triage.root_causes.map((c, i) => <li key={i}><span className={`conf ${c.confidence}`}>{c.confidence}</span>
         <div><b>{c.hypothesis}</b><small>{c.evidence}</small></div></li>)}</ol></>}
-    {t.actions.length > 0 && <><h4>Next steps</h4>
-      <ul className="checklist">{t.actions.map((a, i) => <li key={i}><label><input type="checkbox" /> <span>{a.step}</span> <em>{a.owner}</em></label></li>)}</ul></>}
-    {t.notify.length > 0 && <><h4>Tell</h4>
-      <ul className="notify">{t.notify.map((n, i) => <li key={i}><b>{n.who}</b> {n.why}</li>)}</ul></>}
-    <h4>Message to send</h4>
-    <CodeBlock code={t.message} label="Copy message" />
-    <details className="steps"><summary>How the agent investigated ({t.steps.length} steps)</summary>
-      <ol>{t.steps.map((s, i) => <li key={i}><code>{s.tool}</code>{Object.values(s.input).length > 0 && ` ${Object.values(s.input).join(', ')}`}</li>)}</ol>
-    </details>
+
+    {fix && <>
+      <h4>What the AI fixed</h4>
+      <div className="fix-score">
+        <div><small>Issues</small><b>{fix.before.total} <span>→</span> {fix.after.total}</b></div>
+        <div><small>Critical</small><b>{fix.before.critical} <span>→</span> {fix.after.critical}</b></div>
+        <div><small>Rows</small><b>{fix.rows.before.toLocaleString()} <span>→</span> {fix.rows.after.toLocaleString()}</b></div>
+      </div>
+      <p>{fix.summary}</p>
+      {fix.operations.length > 0 && <ol className="causes">{fix.operations.map((op, i) => <li key={i}><span className="conf done">fixed</span>
+        <div><b>{op.effect}</b><small>{op.reason}</small></div></li>)}</ol>}
+      {fix.warnings.map((w, i) => <p key={i} className="note"><Icon name="info" size={13} /> {w}</p>)}
+      <div className="actions">
+        <a className="button primary" href={api.fixedUrl(projectId, run.id)} download={fix.file_name}><Icon name="download" size={14} /> Download {fix.file_name}</a>
+        <button className="button outline" disabled={!!busy} onClick={recheck}>{busy === 'recheck' ? <Spinner text="Checking…" /> : 'Check the fixed file'}</button>
+      </div>
+      {fix.not_fixed.length > 0 && <><h4>Left for a person</h4>
+        <ul className="notify">{fix.not_fixed.map((n, i) => <li key={i}><b>{n.issue}</b> {n.why}</li>)}</ul></>}
+    </>}
+
+    {triage && <>
+      {triage.actions.length > 0 && <><h4>Next steps</h4>
+        <ul className="checklist">{triage.actions.map((a, i) => <li key={i}><label><input type="checkbox" /> <span>{a.step}</span> <em>{a.owner}</em></label></li>)}</ul></>}
+      {triage.notify.length > 0 && <><h4>Tell</h4>
+        <ul className="notify">{triage.notify.map((n, i) => <li key={i}><b>{n.who}</b> {n.why}</li>)}</ul></>}
+      <h4>Message to send</h4>
+      <CodeBlock code={triage.message} label="Copy message" />
+      <details className="steps"><summary>How the agent investigated ({triage.steps.length} steps)</summary>
+        <ol>{triage.steps.map((s, i) => <li key={i}><code>{s.tool}</code>{Object.values(s.input).length > 0 && ` ${Object.values(s.input).join(', ')}`}</li>)}</ol>
+      </details>
+    </>}
+    {(!triage || !fix) && <div className="actions"><small className="muted">{triage ? 'The repair' : 'The diagnosis'} didn't finish last time.</small>{button}</div>}
   </section>
 }
 
