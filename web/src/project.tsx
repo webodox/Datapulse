@@ -221,7 +221,7 @@ function TriageSection({ run, projectId, ai, changed }: { run: Run; projectId: s
       <b>{busy ? 'The AI agent is investigating…' : 'Let the AI agent triage this'}</b>
       <small>{busy ? 'This takes about 30 seconds.'
         : ai ? 'Finds the likely cause, whether to block, next steps and who to tell.'
-        : 'AI is off. Add ANTHROPIC_API_KEY to .env to turn it on.'}</small>
+        : 'AI is off. Set ANTHROPIC_API_KEY on the server to turn it on.'}</small>
     </div>
     <button className="button primary" disabled={!ai || !!busy} onClick={() => act('triage', async () => { await api.triage(projectId, run.id); await changed() })}>
       {busy ? <Spinner text="Investigating…" /> : <><Icon name="sparkle" size={14} /> Triage with AI</>}
