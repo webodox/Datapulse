@@ -263,26 +263,16 @@ def run_checks(baseline: Dict, df: pd.DataFrame, cfg: Config, data_file: str = "
                baseline_label: str = "baseline", config_label: str = "defaults") -> CheckReport:
     base = baseline["profile"]
     cur = profile_dataframe(df, cfg.max_categories)
-    issues: List[Issue] = []
-    ran: List[str] = []
-    if any(v != "off" for v in (cfg.schema.missing_columns, cfg.schema.added_columns, cfg.schema.type_changes)):
-        ran.append("schema")
-        issues += check_schema(base, cur, cfg)
-    if cfg.row_count.severity != "off":
-        ran.append("row_count")
-        issues += check_row_count(base, cur, cfg)
-    if cfg.null_rate.severity != "off":
-        ran.append("null_rate")
-        issues += check_null_rate(base, cur, cfg)
-    if cfg.categorical.severity != "off":
-        ran.append("categorical")
-        issues += check_categorical(base, df, cfg)
-    if cfg.duplicates.severity != "off":
-        ran.append("duplicates")
-        issues += check_duplicates(base, df, cfg)
-    if cfg.distribution.severity != "off":
-        ran.append("distribution")
-        issues += check_distribution(base, cur, df, cfg)
+    checks = {  # name -> (enabled, run)
+        "schema": (any(v != "off" for v in vars(cfg.schema).values()), lambda: check_schema(base, cur, cfg)),
+        "row_count": (cfg.row_count.severity != "off", lambda: check_row_count(base, cur, cfg)),
+        "null_rate": (cfg.null_rate.severity != "off", lambda: check_null_rate(base, cur, cfg)),
+        "categorical": (cfg.categorical.severity != "off", lambda: check_categorical(base, df, cfg)),
+        "duplicates": (cfg.duplicates.severity != "off", lambda: check_duplicates(base, df, cfg)),
+        "distribution": (cfg.distribution.severity != "off", lambda: check_distribution(base, cur, df, cfg)),
+    }
+    ran = [name for name, (enabled, _) in checks.items() if enabled]
+    issues = [issue for name in ran for issue in checks[name][1]()]
     for i in issues:
         i.consumers = _consumers_for(i, cfg)
     issues.sort(key=lambda i: (-LEVEL[i.severity], i.check, ",".join(i.columns)))

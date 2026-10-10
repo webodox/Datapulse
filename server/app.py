@@ -46,6 +46,10 @@ def upload_dir() -> Path:
     return home() / "uploads"
 
 
+def _loads(text: Optional[str]) -> Any:
+    return json.loads(text) if text else None
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -190,7 +194,7 @@ def _save_baseline(project: sqlite3.Row, name: str, path: Path, df: pd.DataFrame
     if len(df) == 0:
         raise HTTPException(400, f"{name} has no rows; a baseline needs data.")
     cfg = _config(project["config_yaml"])
-    previous = json.loads(project["baseline_json"]) if project["baseline_json"] else None
+    previous = _loads(project["baseline_json"])
     version = previous["baseline_version"] + 1 if previous else 1
     data = build_baseline(df, path, version, cfg.max_categories)
     data["source"]["file"] = name  # the name the user knows, not the storage path
@@ -277,7 +281,7 @@ def get_project(project_id: str) -> dict:
                               "WHERE project_id = ? ORDER BY created_at DESC", (project_id,)).fetchall()
         runs = db.execute("SELECT id, status, issue_count, created_at, report_json FROM runs "
                           "WHERE project_id = ? ORDER BY created_at DESC LIMIT 30", (project_id,)).fetchall()
-    baseline = json.loads(project["baseline_json"]) if project["baseline_json"] else None
+    baseline = _loads(project["baseline_json"])
     cfg = _config(project["config_yaml"])
     return {
         "id": project["id"], "name": project["name"], "created_at": project["created_at"],
@@ -311,19 +315,37 @@ def suggestions(project_id: str) -> dict:
     return {"yaml": render_yaml(suggest_rules(json.loads(project["baseline_json"])["profile"]))}
 
 
-@app.post("/api/projects/{project_id}/baseline")
-async def upload_baseline(project_id: str, file: UploadFile = File(...), name: Optional[str] = Form(None)) -> dict:
+async def _upload(project_id: str, file: UploadFile, name: Optional[str], role: str, use_ai: bool = False) -> dict:
     _project(project_id)
     path = _save_upload(file.filename or "", await file.read(MAX_UPLOAD_BYTES + 1))
-    return _handle(project_id, name or file.filename or "baseline", path, "baseline")
+    return _handle(project_id, name or file.filename or role, path, role, use_ai)
+
+
+@app.post("/api/projects/{project_id}/baseline")
+async def upload_baseline(project_id: str, file: UploadFile = File(...), name: Optional[str] = Form(None)) -> dict:
+    return await _upload(project_id, file, name, "baseline")
 
 
 @app.post("/api/projects/{project_id}/runs")
 async def upload_candidate(project_id: str, file: UploadFile = File(...), name: Optional[str] = Form(None),
                            use_ai: bool = Form(False)) -> dict:
+    return await _upload(project_id, file, name, "candidate", use_ai)
+
+
+@app.delete("/api/projects/{project_id}")
+def delete_project(project_id: str) -> dict:
+    """Delete a project with its datasets, runs and uploaded files (files outside the upload folder are kept)."""
     _project(project_id)
-    path = _save_upload(file.filename or "", await file.read(MAX_UPLOAD_BYTES + 1))
-    return _handle(project_id, name or file.filename or "candidate", path, "candidate", use_ai)
+    uploads = upload_dir()
+    with connect() as db:
+        files = [Path(r["filename"]) for r in db.execute("SELECT filename FROM datasets WHERE project_id = ?",
+                                                          (project_id,))]
+        for table, column in (("runs", "project_id"), ("datasets", "project_id"), ("projects", "id")):
+            db.execute(f"DELETE FROM {table} WHERE {column} = ?", (project_id,))
+    for f in files:
+        if f.parent == uploads:
+            f.unlink(missing_ok=True)
+    return {"deleted": True}
 
 
 @app.post("/api/projects/{project_id}/ingest")

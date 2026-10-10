@@ -126,3 +126,17 @@ def test_project_listing_never_returns_keys(client, project):
     listed = client.get("/api/projects").json()
     assert listed[0]["id"] == project["id"]
     assert "api_key" not in json.dumps(listed) and "api_key_hash" not in json.dumps(listed)
+
+
+def test_delete_project_removes_its_data_but_not_shared_files(client, project, tmp_path):
+    pid = project["id"]
+    client.post(f"/api/projects/{pid}/baseline", files={"file": ("o.csv", _csv(make_df()), "text/csv")})
+    client.post(f"/api/projects/{pid}/runs", files={"file": ("o.csv", _csv(make_df()), "text/csv")})
+    seeded = client.post("/api/demo/seed").json()  # its baseline points at examples/, which must survive
+    assert client.delete(f"/api/projects/{pid}").json() == {"deleted": True}
+    assert client.get(f"/api/projects/{pid}").status_code == 404
+    assert list((tmp_path / "home" / "uploads").iterdir()) == []
+    assert client.delete(f"/api/projects/{seeded['id']}").status_code == 200
+    assert (ROOT / "examples" / "data" / "orders.csv").exists()
+    assert client.delete(f"/api/projects/{pid}").status_code == 404
+    assert client.get("/api/projects").json() == []

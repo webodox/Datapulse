@@ -113,6 +113,13 @@ def _load_check_config(config, config_ref, console):
     return cfg, f"{cfg.source or 'defaults'} (working tree; none at {config_ref})"
 
 
+def _write_report(path: Optional[Path], text: str, kind: str, console: Console) -> None:
+    if path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        console.print(Text(f"{kind} report written to {path}", style="dim"))
+
+
 @app.command("check")
 @guarded
 def check_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file to check."),
@@ -157,16 +164,9 @@ def check_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file to
         if note:
             console.print(Text(note, style="dim"))
     render_terminal(report, console)
-    md_path = markdown or (Path(cfg.report.markdown) if cfg.report.markdown else None)
     md = render_markdown(report)
-    if md_path:
-        md_path.parent.mkdir(parents=True, exist_ok=True)
-        md_path.write_text(md, encoding="utf-8")
-        console.print(Text(f"Markdown report written to {md_path}", style="dim"))
-    if json_out:
-        json_out.parent.mkdir(parents=True, exist_ok=True)
-        json_out.write_text(render_json(report), encoding="utf-8")
-        console.print(Text(f"JSON report written to {json_out}", style="dim"))
+    _write_report(markdown or (Path(cfg.report.markdown) if cfg.report.markdown else None), md, "Markdown", console)
+    _write_report(json_out, render_json(report), "JSON", console)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
@@ -174,15 +174,15 @@ def check_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file to
     raise typer.Exit(report.exit_code)
 
 
-def _check_output(output: Path, cfg, force: bool) -> None:
-    protected = {Path(DEFAULT_CONFIG_NAME).resolve()}
-    if cfg.source:
-        protected.add(Path(cfg.source).resolve())
+def _write_new(output: Path, text: str, cfg, force: bool) -> None:
+    """Write suggestions to a separate file; never to the user's config, never over a file without --force."""
+    protected = {Path(DEFAULT_CONFIG_NAME).resolve()} | ({Path(cfg.source).resolve()} if cfg.source else set())
     if output.resolve() in protected:
         raise DataPulseError(f"Refusing to write to your configuration file {output}. Write to a separate "
                              "file and merge the entries you want by hand.")
     if output.exists() and not force:
         raise DataPulseError(f"{output} already exists. Use --force to overwrite it.")
+    output.write_text(text, encoding="utf-8")
 
 
 @app.command("scan")
@@ -216,8 +216,7 @@ def scan_cmd(data_file: Path = typer.Argument(..., help="The CSV/Parquet file wh
             typer.echo(f"      '{col}' at line {', '.join(map(str, lines))}")
     text = consumers_yaml(result)
     if output:
-        _check_output(output, cfg, force)
-        output.write_text(text, encoding="utf-8")
+        _write_new(output, text, cfg, force)
         typer.echo(f"\nSuggested consumers written to {output}. Review, then merge into {cfg.source or DEFAULT_CONFIG_NAME}.")
     else:
         typer.echo("\n" + text.rstrip())
@@ -239,8 +238,7 @@ def suggest_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file 
     profile = profile_dataframe(df, cfg.max_categories)
     text = render_yaml(suggest_rules(profile))
     if output:
-        _check_output(output, cfg, force)
-        output.write_text(text, encoding="utf-8")
+        _write_new(output, text, cfg, force)
         typer.echo(f"Suggested rules written to {output}. Review them, then merge what you want into "
                    f"{cfg.source or DEFAULT_CONFIG_NAME}.")
     else:

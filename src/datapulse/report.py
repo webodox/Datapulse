@@ -38,63 +38,59 @@ def _consumer_line(c: dict) -> str:
     return f"{c['name']} ({meta}): uses {', '.join(c['columns'])}"
 
 
-def _code_ref_line(r: dict) -> str:
-    if r["columns"]:
-        what = "; ".join(f"'{c}' line {', '.join(map(str, ls))}" for c, ls in r["columns"].items())
-    else:
-        what = f"reads this dataset (matched {r['via']})"
-    return f"{r['file']} ({r['language']}): {what}"
+def _code_ref_line(r: dict, md: bool = False) -> str:
+    q = (lambda x: f"`{x}`") if md else (lambda x: f"'{x}'")
+    what = "; ".join(f"{q(c)} line {', '.join(map(str, ls))}" for c, ls in r["columns"].items())
+    via = r["via"]
+    return f"{q(r['file']) if md else r['file']} ({r['language']}): {what or f'reads this dataset (matched {via})'}"
 
 
 def _summary_line(report: CheckReport) -> str:
-    counts = report.counts()
-    parts = [f"{n} {s}" for s, n in counts.items() if n]
-    return ", ".join(parts) if parts else "no issues"
+    return ", ".join(f"{n} {s}" for s, n in report.counts().items() if n) or "no issues"
 
 
 def render_terminal(report: CheckReport, console: Console) -> None:
-    status = "FAILED" if report.failed else "PASSED"
-    head = Text()
-    head.append("DataPulse check: ", style="bold")
-    head.append(status, style="bold red" if report.failed else "bold green")
+    def out(text: str = "", style: str = "") -> None:
+        console.print(Text(text, style=style))
+
+    head = Text("DataPulse check: ", style="bold")
+    head.append("FAILED" if report.failed else "PASSED", style="bold red" if report.failed else "bold green")
     console.print(head)
-    console.print(Text(f"Data file: {report.data_file}"))
-    console.print(Text(f"Baseline:  {report.baseline_label}"))
-    console.print(Text(f"Config:    {report.config_label}"))
-    console.print(Text(f"Rows:      {report.baseline_rows:,} (baseline) -> {report.current_rows:,} (current), "
-                       f"{report.current_columns} columns"))
-    console.print(Text(f"Issues:    {_summary_line(report)}  (fail_on: {report.fail_on})"))
+    out(f"Data file: {report.data_file}")
+    out(f"Baseline:  {report.baseline_label}")
+    out(f"Config:    {report.config_label}")
+    out(f"Rows:      {report.baseline_rows:,} (baseline) -> {report.current_rows:,} (current), "
+        f"{report.current_columns} columns")
+    out(f"Issues:    {_summary_line(report)}  (fail_on: {report.fail_on})")
     for n, issue in enumerate(report.issues, 1):
-        console.print()
-        t = Text()
-        t.append(f"[{issue.severity.upper()}] ", style=STYLE[issue.severity])
+        out()
+        t = Text(f"[{issue.severity.upper()}] ", style=STYLE[issue.severity])
         t.append(f"{n}. {issue.title}", style="bold")
         t.append(f"   ({issue.check})", style="dim")
         console.print(t)
-        console.print(Text("  Measured: " + issue.detail))
+        out("  Measured: " + issue.detail)
         for k, v in issue.measured.items():
-            console.print(Text(f"    - {_label(k)}: {_fmt(v)}", style="dim"))
+            out(f"    - {_label(k)}: {_fmt(v)}", "dim")
         if issue.examples:
-            console.print(Text("  Examples from the data: " + "; ".join(issue.examples), style="dim"))
-        console.print(Text("  Possible explanation (suggested, not verified): " + issue.explanation, style="italic"))
+            out("  Examples from the data: " + "; ".join(issue.examples), "dim")
+        out("  Possible explanation (suggested, not verified): " + issue.explanation, "italic")
         if issue.ai_explanation:
-            console.print(Text("  AI-generated explanation (suggested, not verified): " + issue.ai_explanation,
-                               style="italic magenta"))
+            out("  AI-generated explanation (suggested, not verified): " + issue.ai_explanation, "italic magenta")
         if issue.code_refs:
-            console.print(Text("  Code that references this (detected by text search; heuristic, not verified):"))
+            out("  Code that references this (detected by text search; heuristic, not verified):")
             for r in issue.code_refs:
-                console.print(Text("    - " + _code_ref_line(r)))
+                out("    - " + _code_ref_line(r))
             if issue.code_refs_more:
-                console.print(Text(f"    ...and {issue.code_refs_more} more file(s)", style="dim"))
+                out(f"    ...and {issue.code_refs_more} more file(s)", "dim")
         if issue.consumers:
-            console.print(Text("  Downstream consumers that may be affected:"))
+            out("  Downstream consumers that may be affected:")
             for c in issue.consumers:
-                console.print(Text("    * " + _consumer_line(c)))
+                out("    * " + _consumer_line(c))
         elif issue.columns:
-            console.print(Text("  Downstream consumers: none of the configured consumers use this column.", style="dim"))
-    console.print()
+            out("  Downstream consumers: none of the configured consumers use this column.", "dim")
+    out()
     if report.passed_checks:
-        console.print(Text("Passed checks: " + ", ".join(report.passed_checks), style="green"))
+        out("Passed checks: " + ", ".join(report.passed_checks), "green")
 
 
 def _md(s: str) -> str:
@@ -140,9 +136,7 @@ def render_markdown(report: CheckReport) -> str:
                 L += ["**AI-generated explanation** _(suggested, not verified)_", "", i.ai_explanation, ""]
             if i.code_refs:
                 L += ["**Code that references this** _(detected by text search; heuristic, not verified)_", ""]
-                L += [f"- `{r['file']}` ({r['language']}): " + (
-                    "; ".join(f"`{c}` line {', '.join(map(str, ls))}" for c, ls in r["columns"].items())
-                    or f"reads this dataset (matched {r['via']})") for r in i.code_refs]
+                L += [f"- {_code_ref_line(r, md=True)}" for r in i.code_refs]
                 if i.code_refs_more:
                     L.append(f"- _...and {i.code_refs_more} more file(s)_")
                 L.append("")
