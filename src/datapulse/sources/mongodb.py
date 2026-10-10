@@ -28,6 +28,7 @@ class MongoDB(Source):
     description = ("Also works for MongoDB Atlas, Amazon DocumentDB and Azure Cosmos DB. Nested fields become "
                    "columns like address.city; lists are kept as text.")
     requires = ("pymongo",)
+    hidden = True  # offered through the single "Database" source
     fields = (
         Field("url", "Connection URL", "mongodb+srv://user:password@cluster.mongodb.net/", secret=True),
         Field("database", "Database", "shop", required=False, help="Leave empty to use the one in the URL."),

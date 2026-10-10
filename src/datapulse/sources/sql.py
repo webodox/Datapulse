@@ -34,6 +34,7 @@ def select_sql(query: str, quote) -> str:
 
 class SQLDatabase(Source):
     group = "Databases"
+    hidden = True  # offered through the single "Database" source, which picks one of these from the URL
     requires: Tuple[str, ...] = ("sqlalchemy",)
     schemes: Tuple[str, ...] = ()   # URL schemes this entry accepts (empty: any except SQLite)
     driver = ""                     # SQLAlchemy driver used when the URL doesn't name one

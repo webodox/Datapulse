@@ -33,6 +33,7 @@ class Field:
     required: bool = True
     multiline: bool = False
     help: str = ""
+    input: str = "text"       # "text", or "file" for an uploaded file (the server stores it and keeps its id)
 
 
 class Source:
@@ -42,6 +43,7 @@ class Source:
     description: ClassVar[str] = ""
     fields: ClassVar[Tuple[Field, ...]] = ()
     requires: ClassVar[Tuple[str, ...]] = ()  # Python packages the plug-in imports
+    hidden: ClassVar[bool] = False            # still works for saved sources, but not offered in the menu
 
     def test(self, settings: Dict[str, str]) -> str:
         """Connect and return a short success message, e.g. "Connected. 12 tables."; raise SourceError if not."""
@@ -73,12 +75,18 @@ def _missing(plugin: Source) -> List[str]:
 GROUPS = ("Databases", "Files & links", "Apps")
 
 
+def error_text(e: Exception) -> str:
+    """A driver exception as one readable line, without SQLAlchemy's "(psycopg.OperationalError) " prefix."""
+    first_line = (str(e).strip().splitlines() or [type(e).__name__])[0]
+    return re.sub(r"^\([\w.]+\)\s*", "", first_line)
+
+
 def catalog() -> List[Dict[str, Any]]:
     """Every plug-in and the form it needs, for the "Add source" menu."""
     plugins = sorted(REGISTRY.values(), key=lambda p: GROUPS.index(p.group) if p.group in GROUPS else len(GROUPS))
     return [{"kind": p.kind, "label": p.label, "group": p.group, "description": p.description,
              "fields": [asdict(f) for f in p.fields], "available": not _missing(p),
-             "missing_packages": _missing(p)} for p in plugins]
+             "missing_packages": _missing(p), "hidden": p.hidden} for p in plugins]
 
 
 def plugin(kind: str) -> Source:
@@ -145,9 +153,7 @@ def _guard(kind: str, settings: Dict[str, str], action):
     except SourceError as e:
         raise SourceError(_scrub(str(e), _secrets(kind, settings))) from None
     except Exception as e:  # drivers raise their own exception types; show their message, never a password
-        first_line = (str(e).strip().splitlines() or [type(e).__name__])[0]
-        first_line = re.sub(r"^\([\w.]+\)\s*", "", first_line)  # SQLAlchemy's "(psycopg.OperationalError) " prefix
-        raise SourceError(f"{REGISTRY[kind].label}: {_scrub(first_line, _secrets(kind, settings))}") from None
+        raise SourceError(f"{REGISTRY[kind].label}: {_scrub(error_text(e), _secrets(kind, settings))}") from None
 
 
 def try_connection(kind: str, settings: Dict[str, str]) -> str:

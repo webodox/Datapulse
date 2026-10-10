@@ -437,3 +437,11 @@ em.bad { color: var(--crit-text); font-style: normal }
 .progress li.next span { background: var(--accent); color: var(--on-accent) }
 .unified-latest { display: flex; align-items: center; gap: 12px; flex-wrap: wrap }
 .unified-latest > div { flex: 1; min-width: 200px; display: grid }
+.kinds.big { gap: 8px }
+.kinds.big .kind { grid-template-columns: auto 1fr; column-gap: 14px; row-gap: 2px; padding: 14px; align-items: center }
+.kinds.big .kind .source-icon { grid-row: span 2 }
+.kinds.big .kind b { font-size: 16px }
+.kind-picker > p { margin: 0 }
+.file-pick { display: grid; gap: 4px; font-weight: 400 }
+.file-pick input { font: 14px var(--font) }
+.detected { display: inline-flex; align-items: center; gap: 5px; color: var(--good-text); font-weight: 600 }

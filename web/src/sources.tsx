@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, plural, timeAgo, type Mapping, type ProjectDetail, type Run, type Source, type SourceKind, type Step } from './api'
-import { Icon } from './icons'
+import { Icon, type IconName } from './icons'
 import { Empty, Modal, Spinner, useAction, useNotify } from './ui'
 
 const STATUS: Record<Source['status'], { label: string; tone: string }> = {
@@ -19,6 +19,15 @@ function useCatalog() {
   return kinds
 }
 const labelOf = (kinds: SourceKind[], kind: string) => kinds.find(k => k.kind === kind)?.label || kind
+const KIND_ICON: Record<string, IconName> = { database: 'database', file: 'upload', link: 'external' }
+
+/** Mirrors the server's detection, to show which database a pasted URL points at. */
+const DETECTED: Array<[RegExp, string]> = [
+  [/^mongodb(\+srv)?:/i, 'MongoDB'], [/^(postgres(ql)?|redshift|timescaledb)(\+\w+)?:/i, 'PostgreSQL'],
+  [/^(mysql|mariadb)(\+\w+)?:/i, 'MySQL / MariaDB'], [/^(mssql|sqlserver)(\+\w+)?:/i, 'Microsoft SQL Server'],
+  [/^snowflake:/i, 'Snowflake'], [/^bigquery:/i, 'BigQuery'], [/^oracle(\+\w+)?:/i, 'Oracle'], [/^databricks:/i, 'Databricks'],
+]
+const detected = (url: string) => url.includes('://') ? DETECTED.find(([re]) => re.test(url.trim()))?.[1] || 'SQL database (driver must be installed on the server)' : null
 
 /* ---------- the Sources tab ---------- */
 
@@ -77,7 +86,7 @@ export function SourcesTab({ detail, changed, ai, openRun }:
     </div>}
 
     {list.length === 0 ? <Empty icon="plug" title="No sources yet">
-      <span>PostgreSQL, MySQL, SQL Server, MongoDB, Google Sheets, file links and more.</span>
+      <span>Any database (PostgreSQL, Supabase, MySQL, SQL Server, MongoDB, Snowflake…), a file, or a link.</span>
     </Empty> : <div className="source-list">
       {list.map(s => <SourceCard key={s.id} source={s} kinds={kinds} detail={detail} ai={ai}
         refresh={refresh} edit={() => setEditing(s)} openRun={openRun} />)}
@@ -108,10 +117,10 @@ function SourceCard({ source: s, kinds, detail, ai, refresh, edit, openRun }:
 
   return <article className="card source">
     <header>
-      <span className="source-icon"><Icon name={s.kind === 'link' ? 'external' : 'database'} size={18} /></span>
+      <span className="source-icon"><Icon name={KIND_ICON[s.kind] || 'database'} size={18} /></span>
       <div>
         <h3>{s.name}</h3>
-        <small className="muted">{labelOf(kinds, s.kind)}{s.last_pulled_at ? ` · pulled ${timeAgo(s.last_pulled_at)}` : ' · never pulled'}</small>
+        <small className="muted">{s.type || labelOf(kinds, s.kind)}{s.last_pulled_at ? ` · pulled ${timeAgo(s.last_pulled_at)}` : ' · never pulled'}</small>
       </div>
       <span className={`pill verdict ${status.tone}`}>{status.label}{s.status === 'mapped' && s.recipe.length > 0 && ` · ${plural(s.recipe.length, 'step')}`}</span>
     </header>
@@ -192,7 +201,6 @@ function SourceDialog({ projectId, kinds, source, close, saved }:
   })
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
   const plugin = kinds.find(k => k.kind === kind)
-  const groups = useMemo(() => [...new Set(kinds.map(k => k.group))], [kinds])
   const savedSecrets = source?.settings.saved_secrets || []
 
   const settings = () => Object.fromEntries(Object.entries(values).filter(([k]) => plugin?.fields.some(f => f.name === k)))
@@ -208,32 +216,48 @@ function SourceDialog({ projectId, kinds, source, close, saved }:
     })
   }
 
+  const upload = (field: string, file: File) => act('upload', async () => {
+    const stored = await api.uploadSourceFile(projectId, file)
+    setValues(v => ({ ...v, [field]: stored.file })); setResult(null)
+    if (!name.trim()) setName(stored.name.replace(/\.[^.]+$/, ''))
+  })
+  const choices = kinds.filter(k => !k.hidden)
+
   return <Modal title={source ? `Edit ${source.name}` : 'Add a data source'} onClose={close}>
     {!plugin ? <div className="kind-picker">
-      {groups.map(g => <div key={g}>
-        <h4>{g}</h4>
-        <div className="kinds">{kinds.filter(k => k.group === g).map(k => <button key={k.kind} type="button" className="kind"
-          disabled={!k.available} title={k.available ? k.description : `Needs ${k.missing_packages.join(', ')} on the server`}
-          onClick={() => { setKind(k.kind); setValues({}); setResult(null) }}>
-          <b>{k.label}</b><small>{k.available ? k.description : 'Not installed on this server'}</small>
-        </button>)}</div>
-      </div>)}
+      <p className="muted">Where does this data live?</p>
+      <div className="kinds big">{choices.map(k => <button key={k.kind} type="button" className="kind"
+        disabled={!k.available} title={k.available ? undefined : `Needs ${k.missing_packages.join(', ')} on the server`}
+        onClick={() => { setKind(k.kind); setValues({}); setResult(null) }}>
+        <span className="source-icon"><Icon name={KIND_ICON[k.kind] || 'database'} size={20} /></span>
+        <b>{k.label}</b><small>{k.available ? k.description : 'Not installed on this server'}</small>
+      </button>)}</div>
     </div> : <form className="source-form" onSubmit={submit}>
       {!source && <button type="button" className="link back" onClick={() => setKind('')}>← {plugin.label}</button>}
-      <label>Name<input value={name} onChange={e => setName(e.target.value)} placeholder={`e.g. ${plugin.group === 'Databases' ? 'Store database' : 'Sales sheet'}`} maxLength={80} /></label>
+      <label>Name<input value={name} onChange={e => setName(e.target.value)} maxLength={80}
+        placeholder={`e.g. ${kind === 'database' ? 'Store database' : kind === 'file' ? 'March export' : 'Sales sheet'}`} /></label>
       {plugin.fields.map(f => <label key={f.name}>{f.label}{!f.required && <small className="muted"> optional</small>}
-        {f.multiline
+        {f.input === 'file'
+          ? <span className="file-pick">
+            <input type="file" accept=".csv,.json,.jsonl,.ndjson,.parquet,.pq" disabled={!!busy}
+              onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) upload(f.name, file) }} />
+            <small className="muted">{busy === 'upload' ? 'Uploading…' : values[f.name] ? `Uploaded: ${values[f.name].split('/').pop()}` : f.placeholder}</small>
+          </span>
+          : f.multiline
           ? <textarea rows={3} value={values[f.name] || ''} placeholder={f.placeholder} spellCheck={false}
             onChange={e => { setValues(v => ({ ...v, [f.name]: e.target.value })); setResult(null) }} />
           : <input type={f.secret ? 'password' : undefined} value={values[f.name] || ''} autoComplete="off" spellCheck={false}
             placeholder={f.secret && savedSecrets.includes(f.name) ? 'Saved. Leave empty to keep it' : f.placeholder}
             onChange={e => { setValues(v => ({ ...v, [f.name]: e.target.value })); setResult(null) }} />}
-        {f.help && <small className="muted">{f.help}</small>}
+        {kind === 'database' && f.name === 'url' && values.url && detected(values.url)
+          ? <small className="detected"><Icon name="check" size={12} /> {detected(values.url)}</small>
+          : f.help && <small className="muted">{f.help}</small>}
       </label>)}
       {plugin.fields.some(f => f.secret) && <p className="muted small"><Icon name="shield" size={13} /> Passwords stay on the DataPulse server and are never shown again. A read-only database user is best.</p>}
       {result && <p className={`test-result ${result.ok ? 'ok' : 'bad'}`}><Icon name={result.ok ? 'check' : 'alert'} size={14} /> {result.message}</p>}
       <div className="actions">
-        <button type="button" className="button outline" disabled={!!busy} onClick={test}>{busy === 'test' ? <Spinner text="Connecting…" /> : 'Test connection'}</button>
+        <button type="button" className="button outline" disabled={!!busy} onClick={test}>
+          {busy === 'test' ? <Spinner text={kind === 'file' ? 'Reading…' : 'Connecting…'} /> : kind === 'file' ? 'Read the file' : 'Test connection'}</button>
         <button className="button primary" disabled={!!busy}>{busy === 'save' ? <Spinner text="Saving…" /> : source ? 'Save changes' : 'Add source'}</button>
       </div>
     </form>}
@@ -247,7 +271,7 @@ export function SourceNote({ projectId, run }: { projectId: string; run: Run }) 
   const s = run.report.source!
   return <div className="source-note">
     <Icon name="database" size={15} />
-    <span>Pulled {s.rows_pulled.toLocaleString()} rows from <b>{s.name}</b> ({labelOf(kinds, s.kind)})
+    <span>Pulled {s.rows_pulled.toLocaleString()} rows from <b>{s.name}</b> ({s.type || labelOf(kinds, s.kind)})
       {s.mapped ? (s.steps.length ? `, converted to the standard in ${plural(s.steps.length, 'step')}` : '') : '. Not mapped to the standard yet.'}</span>
     <a className="link" href={api.runDataUrl(projectId, run.id)}><Icon name="download" size={13} /> Data</a>
     {s.problems.map(p => <p key={p} className="note warn"><Icon name="alert" size={13} /> The source changed shape. {p}</p>)}
@@ -261,7 +285,7 @@ export function UnifiedNote({ projectId, run }: { projectId: string; run: Run })
     <span>Combined from {plural(run.report.unified!.sources.filter(s => !s.error).length, 'source')}, each converted to the standard.</span>
     <a className="button outline" href={api.runDataUrl(projectId, run.id)}><Icon name="download" size={14} /> Download unified table</a>
     <ul>{run.report.unified!.sources.map(s => <li key={s.name}>
-      <b>{s.name}</b> <small className="muted">{labelOf(kinds, s.kind)}</small>
+      <b>{s.name}</b> <small className="muted">{s.type || labelOf(kinds, s.kind)}</small>
       {s.error ? <em className="bad">{s.error}</em> : <span>{s.rows.toLocaleString()} rows</span>}
       {s.problems.map(p => <em key={p} className="bad">{p}</em>)}
     </li>)}</ul>

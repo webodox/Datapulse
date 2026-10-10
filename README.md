@@ -57,10 +57,13 @@ store system that keeps amounts in cents, and an online shop that stores prices 
 The **Sources** tab (the first tab of every project) connects a project to where its data lives, so nobody
 downloads and uploads files:
 
-| Group | Sources |
+**Add source** offers three choices:
+
+| Choice | What you give it |
 |---|---|
-| Databases | PostgreSQL (also Supabase, Neon, Railway, RDS, Redshift), MySQL / MariaDB, Microsoft SQL Server / Azure SQL, MongoDB (also Atlas, DocumentDB, Cosmos DB), SQLite, and any other database with a SQLAlchemy driver (Snowflake, BigQuery, Oracle, Databricks…) |
-| Files & links | Any CSV, JSON or Parquet link, including Google Sheets share links |
+| **Database** | A connection URL. DataPulse recognises the database from it: PostgreSQL (also Supabase, Neon, Railway, RDS, Redshift), MySQL / MariaDB, Microsoft SQL Server / Azure SQL, MongoDB (also Atlas, DocumentDB, Cosmos DB), and any other database with a SQLAlchemy driver installed (Snowflake, BigQuery, Oracle, Databricks…). Then a table name, one `SELECT` query, or for MongoDB a collection (`database.collection`). |
+| **File** | An uploaded CSV, JSON, JSON Lines or Parquet file. Edit the source to upload a newer version. |
+| **Link** | A public `https://` link to a CSV, JSON or Parquet file, including Google Sheets share links. |
 
 **How unifying works.** One source is the *standard*: its format (columns, types, value scales) becomes the
 project's baseline. Every other source is mapped onto it once. Columns whose names match apart from case and

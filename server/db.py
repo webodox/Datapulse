@@ -22,10 +22,17 @@ def samples_dir() -> Path:
     return home() / "samples"
 
 
-def allow_sample_sources() -> None:
+def source_files_dir() -> Path:
+    """Files uploaded as data sources: <upload id>/<original name>."""
+    return home() / "source_files"
+
+
+def configure_sources() -> None:
+    """Point the file and SQLite plug-ins at this server's folders (the sample databases are SQLite files)."""
     folders = [d for d in os.getenv("DATAPULSE_SQLITE_DIR", "").split(os.pathsep) if d]
     if str(samples_dir()) not in folders:
         os.environ["DATAPULSE_SQLITE_DIR"] = os.pathsep.join([*folders, str(samples_dir())])
+    os.environ["DATAPULSE_SOURCE_FILES"] = str(source_files_dir())
 
 
 def now_iso() -> str:
