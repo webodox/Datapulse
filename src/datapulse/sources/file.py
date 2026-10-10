@@ -1,12 +1,10 @@
-"""An uploaded file (CSV, JSON, JSON Lines or Parquet). Upload a newer version by editing the source."""
+"""An uploaded file: CSV, Excel, JSON or Parquet, or a document the AI reads at upload. Edit the source to replace it."""
 from __future__ import annotations
 
 import os
 import re
 from pathlib import Path
 
-from ..io import INPUTS
-from .anyfile import frame_from_path
 from .base import Field, Source, SourceError, register
 
 STORED = re.compile(r"^[0-9a-f]{32}/[^/\\]+$")  # "<upload id>/<original file name>"
@@ -31,18 +29,18 @@ def stored_path(value: str) -> Path:
 @register
 class File(Source):
     kind, label, group = "file", "File", "Files & links"
-    description = ("Upload a spreadsheet (CSV, Excel, JSON, Parquet) or a document (PDF, Word, email, text, "
-                   "HTML, image, zip). A PDF of a table is read as that table. Use the sample orders file to try it. "
+    description = ("Upload a spreadsheet (CSV, Excel, JSON, Parquet) or a document (PDF, Word, email, text, HTML, image). "
+                   "A PDF of a table is read as that table. Use the sample orders file to try it. "
                    "Upload a newer version by editing the source.")
     has_sample = True
-    fields = (Field("file", "File", "CSV, Excel, JSON, PDF, Word, email, text, or zip · up to 25 MB", input="file"),)
+    fields = (Field("file", "File", "CSV, Excel, JSON, PDF, Word, email, text, or image · up to 25 MB", input="file"),)
 
     def test(self, settings):
         df = self.fetch(settings, 0)
         return f"Read the file: {len(df):,} rows, {len(df.columns)} columns."
 
     def fetch(self, settings, max_rows):
+        from .connected import read_any
+
         path = stored_path(settings["file"])
-        if path.suffix.lower() not in INPUTS:
-            raise SourceError(f"Unsupported file type '{path.suffix}'.")
-        return frame_from_path(path, Path(settings["file"]).name)
+        return read_any(path, path.name)

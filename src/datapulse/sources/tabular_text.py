@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+from pathlib import Path
 
 import pandas as pd
 
@@ -12,6 +13,16 @@ from datapulse.io import normalize_frame
 _PAGE = re.compile(r"^\[page \d+\]$")
 # Comma first: that is how a spreadsheet saved as a PDF of its rows is written.
 _DELIMITERS = (",", "\t", "|", ";")
+
+
+def pdf_frame(path, label: str) -> pd.DataFrame | None:
+    """The spreadsheet inside a PDF, or None when the PDF is prose, a scan, or a picture."""
+    from datapulse.unifier.documents import read_documents
+
+    docs, _skipped = read_documents([(Path(path), label)])
+    if len(docs) != 1:
+        return None
+    return table_from_text(docs[0].text, label)
 
 
 def table_from_text(text: str, label: str = "document") -> pd.DataFrame | None:

@@ -111,12 +111,9 @@ class DriveFile(Source):
     fields = (Field("url", "Share link", "https://drive.google.com/file/d/…/view"),)
 
     def _table(self, settings) -> pd.DataFrame:
-        import tempfile
+        from datapulse.sources.connected import download  # data files and documents alike; temp folder removed
 
-        from .anyfile import frame_from_path
-
-        path = GoogleDriveSource().fetch({"url": settings["url"]}, {}, Path(tempfile.mkdtemp()))
-        return frame_from_path(path, path.name)
+        return download(GoogleDriveSource(), {"url": settings["url"]}, {}, "the Google Drive file")
 
     def test(self, settings):
         df = self._table(settings)

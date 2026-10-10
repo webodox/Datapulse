@@ -18,7 +18,7 @@ from datapulse.unifier.documents import expand_zip, is_document, is_tabular
 from datapulse.unifier.pipeline import unify_files
 
 from .base import SourceError
-from .tabular_text import table_from_text
+from .tabular_text import pdf_frame
 
 
 def frame_from_path(path, label: str | None = None) -> pd.DataFrame:
@@ -56,13 +56,7 @@ def frame_from_bytes(data: bytes, name: str) -> pd.DataFrame:
 
 
 def _pdf_table(path, label: str) -> pd.DataFrame | None:
-    """The spreadsheet inside a PDF, or None when the PDF is prose, a scan, or a picture."""
-    from datapulse.unifier.documents import read_documents
-
-    docs, _skipped = read_documents([(path, label)])
-    if len(docs) != 1:
-        return None
-    return table_from_text(docs[0].text, label)
+    return pdf_frame(path, label)
 
 
 def _rows(files, label: str) -> pd.DataFrame:
