@@ -25,7 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "httpx>=0.24", "mongomock>=4.1", "datapulse[sources]"]
-web = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "python-multipart>=0.0.9"]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "python-multipart>=0.0.9", "httpx>=0.24"]
 # Data-source plug-ins: SQL databases (PostgreSQL, MySQL, SQL Server, SQLite...) and MongoDB.
 sources = ["sqlalchemy>=2", "psycopg[binary]>=3.1", "pymysql>=1.1", "pymssql>=2.2", "pymongo>=4"]
 build = ["pyinstaller>=6"]

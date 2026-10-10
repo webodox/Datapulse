@@ -40,6 +40,19 @@ class TestForm(BaseModel):
     source_id: Optional[str] = None  # testing an edit: blank secrets fall back to the saved ones
 
 
+class SampleRequest(BaseModel):
+    kind: str
+
+
+# Public files the Add source form can fill in, so a new source can be tried without credentials.
+REMOTE_SAMPLES = {
+    "link": ("Sample states file",
+             {"url": "https://raw.githubusercontent.com/plotly/datasets/master/2014_usa_states.csv"}),
+    "rest": ("Sample users API", {"url": "https://jsonplaceholder.typicode.com/users"}),
+    "web_page": ("Example page", {"url": "https://example.com"}),
+}
+
+
 class Pull(BaseModel):
     role: Literal["candidate", "baseline"] = "candidate"
 
@@ -145,9 +158,32 @@ async def upload_source_file(project_id: str, file: UploadFile = File(...)) -> d
     return {"file": f"{upload_id}/{name}", "name": name}
 
 
+def _file_sample() -> Dict[str, Any]:
+    """The example orders CSV, stored like an uploaded File source."""
+    configure_sources()
+    upload_id = uuid.uuid4().hex
+    folder = source_files_dir() / upload_id
+    folder.mkdir(parents=True)
+    (folder / "orders.csv").write_bytes((ROOT / "examples" / "data" / "orders.csv").read_bytes())
+    return {"name": "Sample orders", "settings": {"file": f"{upload_id}/orders.csv"}}
+
+
 @router.get("/sources/catalog")
 def source_catalog() -> list:
     return catalog()
+
+
+@router.post("/projects/{project_id}/sources/sample")
+def source_sample(project_id: str, payload: SampleRequest) -> dict:
+    """Settings that make Test connection succeed, for the Add source form."""
+    project_row(project_id)
+    if payload.kind == "file":
+        return _file_sample()
+    found = REMOTE_SAMPLES.get(payload.kind)
+    if found is None:
+        raise HTTPException(404, "This source has no test data. Enter your own connection details.")
+    name, settings = found
+    return {"name": name, "settings": settings}
 
 
 @router.get("/projects/{project_id}/sources")

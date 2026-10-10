@@ -178,6 +178,19 @@ def test_google_drive_confirm_token(tmp_path, mock_http):
     assert len(load_dataframe(path)) == 1
 
 
+def test_rest_plugin_returns_a_table(mock_http):
+    from datapulse.sources.base import plugin
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"id": 1, "name": "Ada"}], headers={"content-type": "application/json"})
+
+    mock_http(handler)
+    src = plugin("rest")
+    df = src.fetch({"url": "https://api.example.com/users"}, 10)
+    assert list(df.columns) == ["id", "name"] and len(df) == 1
+    assert src.test({"url": "https://api.example.com/users"}).startswith("Reached the API")
+
+
 def test_excel_loader(tmp_path):
     path = tmp_path / "orders.xlsx"
     make_df(20).to_excel(path, index=False)

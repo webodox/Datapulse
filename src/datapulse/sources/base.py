@@ -44,6 +44,7 @@ class Source:
     fields: ClassVar[Tuple[Field, ...]] = ()
     requires: ClassVar[Tuple[str, ...]] = ()  # Python packages the plug-in imports
     hidden: ClassVar[bool] = False            # still works for saved sources, but not offered in the menu
+    has_sample: ClassVar[bool] = False        # the Add source form can fill itself with test data
 
     def test(self, settings: Dict[str, str]) -> str:
         """Connect and return a short success message, e.g. "Connected. 12 tables."; raise SourceError if not."""
@@ -86,7 +87,7 @@ def catalog() -> List[Dict[str, Any]]:
     plugins = sorted(REGISTRY.values(), key=lambda p: GROUPS.index(p.group) if p.group in GROUPS else len(GROUPS))
     return [{"kind": p.kind, "label": p.label, "group": p.group, "description": p.description,
              "fields": [asdict(f) for f in p.fields], "available": not _missing(p),
-             "missing_packages": _missing(p), "hidden": p.hidden} for p in plugins]
+             "missing_packages": _missing(p), "hidden": p.hidden, "has_sample": p.has_sample} for p in plugins]
 
 
 def plugin(kind: str) -> Source:

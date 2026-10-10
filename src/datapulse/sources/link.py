@@ -66,6 +66,7 @@ def read_bytes(data: bytes, url: str, content_type: str) -> pd.DataFrame:
 class Link(Source):
     kind, label, group = "link", "Link", "Files & links"
     description = "A CSV, JSON or Parquet file at a public link: Google Sheets, open-data portals, cloud storage."
+    has_sample = True
     fields = (Field("url", "Link", "https://docs.google.com/spreadsheets/d/…  or  https://example.com/orders.csv"),)
 
     def get(self, settings):

@@ -30,7 +30,8 @@ def stored_path(value: str) -> Path:
 @register
 class File(Source):
     kind, label, group = "file", "File", "Files & links"
-    description = "Upload a CSV, JSON or Parquet file. Upload a newer version any time by editing the source."
+    description = "Upload a CSV, JSON or Parquet file, or use the sample orders file. Upload a newer version by editing the source."
+    has_sample = True
     fields = (Field("file", "File", "CSV, JSON, JSONL or Parquet · up to 25 MB", input="file"),)
 
     def test(self, settings):

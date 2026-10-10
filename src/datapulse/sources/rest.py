@@ -6,7 +6,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from datapulse.errors import DataPulseError
+from datapulse.sources.base import Field, Source, flatten, register
 from datapulse.sources.http import fetch_bytes, require_str
 
 
@@ -91,3 +94,53 @@ class RestSource:
         path = dest_dir / f"{uuid.uuid4().hex}.jsonl"
         path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8")
         return path
+
+
+def _headers(raw: str) -> dict:
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise DataPulseError('Headers must be JSON, like {"Authorization": "Bearer …"}') from exc
+    if not isinstance(parsed, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in parsed.items()):
+        raise DataPulseError("Each header name and value must be a string")
+    return parsed
+
+
+def records_frame(url: str, records_path: str = "", headers: str = "") -> pd.DataFrame:
+    """The JSON at url as a table. Used by the Add source form."""
+    body, response_headers, _ = fetch_bytes(url, headers=_headers(headers) or None)
+    ctype = response_headers.get("content-type", "").lower()
+    if "json" not in ctype and body.lstrip()[:1] not in (b"{", b"["):
+        raise DataPulseError(f"Expected a JSON response but got Content-Type '{ctype or 'unknown'}'")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DataPulseError(f"Response is not valid JSON: {exc}") from exc
+    records = extract_records(payload, records_path.strip() or None)
+    if not records or not all(isinstance(r, dict) for r in records):
+        raise DataPulseError("No rows found in the response")
+    return flatten(records)
+
+
+@register
+class RestAPI(Source):
+    kind, label, group = "rest", "REST API", "Files & links"
+    description = "Paste a URL that returns JSON. Use test data to try a public users API."
+    requires = ("httpx",)
+    has_sample = True
+    fields = (
+        Field("url", "URL", "https://jsonplaceholder.typicode.com/users"),
+        Field("records_path", "Records path", "data.items", required=False,
+              help="Dot path to the list of rows, when the rows are nested. Leave empty to find them."),
+        Field("headers", "Headers (JSON)", '{"Authorization": "Bearer …"}', required=False, secret=True, multiline=True,
+              help="Optional. Sent with every request and stored only on the server."),
+    )
+
+    def fetch(self, settings, max_rows):
+        return records_frame(settings["url"], settings.get("records_path", ""), settings.get("headers", "")).head(max_rows + 1)
+
+    def test(self, settings):
+        df = records_frame(settings["url"], settings.get("records_path", ""), settings.get("headers", ""))
+        return f"Reached the API: {len(df):,} rows, {df.shape[1]} columns."
