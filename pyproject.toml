@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "datapulse"
 version = "0.1.0"
-description = "Catch data-quality regressions in CSV and Parquet files before they break dashboards and models."
+description = "AI data-quality agent: an ML drift model and a Claude triage agent catch data changes before they break dashboards and models."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
   "typer>=0.9",
@@ -16,6 +16,8 @@ dependencies = [
   "pyarrow>=12",
   "pyyaml>=6",
   "rich>=13",
+  "scikit-learn>=1.2",
+  "anthropic>=1",
 ]
 
 [project.optional-dependencies]

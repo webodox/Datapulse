@@ -34,6 +34,7 @@ class CheckReport:
     fail_on: str
     max_examples: int = 5
     config_label: str = "defaults"
+    triage: Optional[Dict[str, Any]] = None  # AI triage agent output (agent.run_triage), when requested
 
     @property
     def failed(self) -> bool:

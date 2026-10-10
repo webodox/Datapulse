@@ -59,6 +59,14 @@ class DistributionCfg:
 
 
 @dataclass
+class MLDriftCfg:
+    severity: str = "warning"
+    max_auc: float = 0.7  # 0.5 = the model can't tell the files apart; 1.0 = it always can
+    max_rows: int = 5000
+    exclude: List[str] = field(default_factory=list)
+
+
+@dataclass
 class Consumer:
     name: str
     type: str
@@ -100,6 +108,7 @@ class Config:
     categorical: CategoricalCfg = field(default_factory=CategoricalCfg)
     duplicates: DuplicatesCfg = field(default_factory=DuplicatesCfg)
     distribution: DistributionCfg = field(default_factory=DistributionCfg)
+    ml_drift: MLDriftCfg = field(default_factory=MLDriftCfg)
     consumers: List[Consumer] = field(default_factory=list)
     report: ReportCfg = field(default_factory=ReportCfg)
     ai: AICfg = field(default_factory=AICfg)
@@ -143,6 +152,9 @@ checks:
     severity: warning
     psi_threshold: 0.2        # Population Stability Index limit
     max_mean_shift_std: 1.0   # allowed mean shift, in baseline standard deviations
+  ml_drift:                   # a model learns to tell baseline rows from new rows; needs the baseline file
+    severity: warning
+    max_auc: 0.7              # 0.5 = indistinguishable (no drift), 1.0 = completely different
 
 # Map columns to the things that read them so reports can show who is affected.
 # consumers:
@@ -245,6 +257,7 @@ def _nullable(check):
 
 
 SEVERITY = _choice(*SEVERITIES, "off")
+MIN_ML_ROWS = 100
 RATE = _number(0, 1)
 # section path -> (attribute on Config, {key: validator})
 SECTIONS = {
@@ -255,6 +268,8 @@ SECTIONS = {
     "checks.duplicates": ("duplicates", {"severity": SEVERITY, "max_duplicate_rate": RATE, "columns": _str_list}),
     "checks.distribution": ("distribution", {"severity": SEVERITY, "psi_threshold": _number(0),
                                              "max_mean_shift_std": _number(0), "columns": _str_list}),
+    "checks.ml_drift": ("ml_drift", {"severity": SEVERITY, "max_auc": _number(0.5, 1), "max_rows": _int(MIN_ML_ROWS),
+                                     "exclude": _str_list}),
     "report": ("report", {"markdown": _nullable(_str), "max_examples": _int(), "show_values": _bool}),
     "discovery": ("discovery", {"enabled": _bool, "root": _str, "scope": _choice("readers", "all"),
                                 "exclude": _str_list}),

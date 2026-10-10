@@ -91,6 +91,10 @@ def render_terminal(report: CheckReport, console: Console) -> None:
     out()
     if report.passed_checks:
         out("Passed checks: " + ", ".join(report.passed_checks), "green")
+    if report.triage:
+        out()
+        for line in triage_lines(report.triage):
+            out(line, "magenta" if line.startswith("AI triage") else "")
 
 
 def _md(s: str) -> str:
@@ -148,9 +152,31 @@ def render_markdown(report: CheckReport) -> str:
                 L += ["_No configured consumer uses this column._", ""]
     if report.passed_checks:
         L += ["### Checks that passed", "", ", ".join(f"`{c}`" for c in report.passed_checks), ""]
+    if report.triage:
+        t = report.triage
+        L += ["### AI triage _(AI-generated from aggregate statistics; verify before acting)_", "",
+              f"**{_md(t['headline'])}**", "", f"Verdict: **{VERDICT[t['verdict']]}**. {t['verdict_reason']}", ""]
+        L += ["**Likely causes**", ""] + [f"- ({c['confidence']}) {c['hypothesis']} _Evidence: {c['evidence']}_"
+                                          for c in t["root_causes"]] + [""]
+        L += ["**Next steps**", ""] + [f"- [ ] {a['step']} ({a['owner']})" for a in t["actions"]] + [""]
+        if t["notify"]:
+            L += ["**Notify**", ""] + [f"- {n['who']}: {n['why']}" for n in t["notify"]] + [""]
+        L += ["**Message to send**", "", "> " + t["message"].replace("\n", "\n> "), ""]
     L += ["---", "_Numbers above are measured from aggregate profile statistics. Explanations are suggestions "
           "and are not verified. No dataset rows were uploaded anywhere._", ""]
     return "\n".join(L)
+
+
+VERDICT = {"block": "Block this batch", "investigate": "Investigate before shipping", "safe_to_ship": "Safe to ship"}
+
+
+def triage_lines(t: dict) -> list:
+    lines = [f"AI triage (AI-generated, verify before acting): {t['headline']}",
+             f"  Verdict: {VERDICT[t['verdict']]}. {t['verdict_reason']}", "  Likely causes:"]
+    lines += [f"    - ({c['confidence']}) {c['hypothesis']}" for c in t["root_causes"]]
+    lines += ["  Next steps:"] + [f"    [ ] {a['step']} ({a['owner']})" for a in t["actions"]]
+    lines += ["  Notify:"] + [f"    - {n['who']}: {n['why']}" for n in t["notify"]] if t["notify"] else []
+    return lines + ["  Message to send:"] + ["    " + ln for ln in t["message"].splitlines()]
 
 
 def render_json(report: CheckReport) -> str:
@@ -172,6 +198,7 @@ def render_json(report: CheckReport) -> str:
         "counts": report.counts(),
         "checks_run": report.checks_run,
         "passed_checks": report.passed_checks,
+        "triage": report.triage,
         "issues": [
             {"check": i.check, "severity": i.severity, "title": i.title, "columns": i.columns,
              "measured_summary": i.detail, "measured": i.measured, "examples": i.examples,

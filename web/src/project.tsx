@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, API_ORIGIN, fmtDate, plural, runTone, timeAgo, SEVERITIES, TONE_LABEL,
-  type Issue, type ProjectDetail, type Run, type Severity } from './api'
+  type Issue, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft } from './api'
 import type { Route } from './App'
 import { Icon, type IconName } from './icons'
 import { CodeBlock, copyText, Dropzone, Empty, Spinner, useAction, useNotify } from './ui'
@@ -13,9 +13,9 @@ const FAIL_ON: Record<string, string> = {
   critical: 'Fails on critical issues', warning: 'Fails on warnings or worse', info: 'Fails on any issue', never: 'Never fails',
 }
 
-type Props = { route: Route & { id: string }; go: (r: Route) => void; onChanged: () => Promise<unknown>; apiKey?: string; dismissKey: () => void }
+type Props = { route: Route & { id: string }; go: (r: Route) => void; onChanged: () => Promise<unknown>; apiKey?: string; dismissKey: () => void; ai: boolean }
 
-export function ProjectView({ route, go, onChanged, apiKey, dismissKey }: Props) {
+export function ProjectView({ route, go, onChanged, apiKey, dismissKey, ai }: Props) {
   const notify = useNotify()
   const [detail, setDetail] = useState<ProjectDetail | null>(null)
   const [draft, setDraft] = useState('') // rules editor text survives tab switches
@@ -67,16 +67,16 @@ export function ProjectView({ route, go, onChanged, apiKey, dismissKey }: Props)
       </a>)}
     </nav>
 
-    {route.tab === 'checks' && <ChecksTab detail={detail} runId={route.run} select={run => go({ ...route, run })} changed={changed} />}
+    {route.tab === 'checks' && <ChecksTab detail={detail} runId={route.run} select={run => go({ ...route, run })} changed={changed} ai={ai} />}
     {route.tab === 'baseline' && <BaselineTab detail={detail} changed={changed} />}
-    {route.tab === 'rules' && <RulesTab detail={detail} draft={draft} setDraft={setDraft} dirty={dirty} changed={changed} />}
+    {route.tab === 'rules' && <RulesTab detail={detail} draft={draft} setDraft={setDraft} dirty={dirty} changed={changed} ai={ai} />}
     {route.tab === 'api' && <ApiTab detail={detail} apiKey={apiKey} />}
   </div>
 }
 
 /* ---------- checks ---------- */
 
-function ChecksTab({ detail, runId, select, changed }: { detail: ProjectDetail; runId?: string; select: (id?: string) => void; changed: () => Promise<unknown> }) {
+function ChecksTab({ detail, runId, select, changed, ai }: { detail: ProjectDetail; runId?: string; select: (id?: string) => void; changed: () => Promise<unknown>; ai: boolean }) {
   const notify = useNotify()
   const [busy, run] = useAction()
   const [useAi, setUseAi] = useState(false)
@@ -106,7 +106,7 @@ function ChecksTab({ detail, runId, select, changed }: { detail: ProjectDetail; 
     </div>
     {viewed ? <div className="checks-layout">
       <RunHistory runs={detail.runs} selected={viewed.id} select={select} />
-      <RunReport key={viewed.id} run={viewed} isLatest={viewed.id === detail.runs[0].id} />
+      <RunReport key={viewed.id} run={viewed} isLatest={viewed.id === detail.runs[0].id} projectId={detail.id} ai={ai} changed={changed} />
     </div> : <Empty icon="activity" title="No checks yet"><span>Drop a file above. Results and history appear here.</span></Empty>}
   </>
 }
@@ -130,7 +130,7 @@ function RunHistory({ runs, selected, select }: { runs: Run[]; selected: string;
   </aside>
 }
 
-function RunReport({ run, isLatest }: { run: Run; isLatest: boolean }) {
+function RunReport({ run, isLatest, projectId, ai, changed }: { run: Run; isLatest: boolean; projectId: string; ai: boolean; changed: () => Promise<unknown> }) {
   const notify = useNotify()
   const [filter, setFilter] = useState<Severity | null>(null)
   const { report } = run
@@ -149,6 +149,8 @@ function RunReport({ run, isLatest }: { run: Run; isLatest: boolean }) {
       {report.markdown && <button className="button ghost" onClick={() => copyText(report.markdown!, notify, 'Markdown report copied')}>
         <Icon name="copy" size={14} /> Copy report</button>}
     </div>
+
+    {report.issues.length > 0 && <TriageSection run={run} projectId={projectId} ai={ai} changed={changed} />}
 
     {counts.length > 1 && <div className="filters">
       <button className={!filter ? 'on' : ''} onClick={() => setFilter(null)}>All {report.issues.length}</button>
@@ -170,6 +172,7 @@ function IssueCard({ issue }: { issue: Issue }) {
       <h3>{issue.title}</h3>
     </header>
     <p>{issue.measured_summary}</p>
+    {issue.check === 'ml_drift' && <DriftBars issue={issue} />}
     <p className="cause"><b>Possible cause</b> <small>(suggestion, not verified)</small> {issue.suggested_explanation}</p>
     {issue.ai_explanation && <p className="cause ai"><b><Icon name="sparkle" size={12} /> AI suggestion</b> <small>(unverified)</small> {issue.ai_explanation}</p>}
     {issue.consumers.length > 0 && <p className="affects"><b>May affect</b>{issue.consumers.map(c =>
@@ -181,6 +184,73 @@ function IssueCard({ issue }: { issue: Issue }) {
       <small className="muted">Check: <code>{issue.check}</code></small>
     </details>}
   </article>
+}
+
+/* ---------- AI triage agent ---------- */
+
+const VERDICT: Record<Triage['verdict'], { label: string; tone: string; icon: IconName }> = {
+  block: { label: 'Block this batch', tone: 'failed', icon: 'alert' },
+  investigate: { label: 'Investigate before shipping', tone: 'issues', icon: 'flag' },
+  safe_to_ship: { label: 'Safe to ship', tone: 'clean', icon: 'check' },
+}
+
+function TriageSection({ run, projectId, ai, changed }: { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown> }) {
+  const [busy, act] = useAction()
+  const triage = run.report.triage
+  if (triage) return <TriagePanel triage={triage} />
+  return <div className="triage-cta">
+    <span className="triage-icon"><Icon name="sparkle" size={18} /></span>
+    <div>
+      <b>{busy ? 'The AI agent is investigating…' : 'Let the AI agent triage this'}</b>
+      <small>{busy ? 'Reading the issues, column statistics, history and consumers. Usually 15–40 seconds.'
+        : ai ? 'It works out the likely cause, whether to block, the fix steps, who to tell, and drafts the message.'
+        : 'AI is off: set ANTHROPIC_API_KEY for the server to turn it on (see .env.example).'}</small>
+    </div>
+    <button className="button primary" disabled={!ai || !!busy} onClick={() => act('triage', async () => { await api.triage(projectId, run.id); await changed() })}>
+      {busy ? <Spinner text="Investigating…" /> : <><Icon name="sparkle" size={14} /> Triage with AI</>}
+    </button>
+  </div>
+}
+
+function TriagePanel({ triage: t }: { triage: Triage }) {
+  const v = VERDICT[t.verdict]
+  return <section className="triage">
+    <header>
+      <span className={`pill verdict ${v.tone}`}><Icon name={v.icon} size={12} /> {v.label}</span>
+      <small className="muted"><Icon name="sparkle" size={12} /> AI triage · verify before acting</small>
+    </header>
+    <h3>{t.headline}</h3>
+    <p className="muted">{t.verdict_reason}</p>
+    {t.root_causes.length > 0 && <><h4>Likely causes</h4>
+      <ol className="causes">{t.root_causes.map((c, i) => <li key={i}><span className={`conf ${c.confidence}`}>{c.confidence}</span>
+        <div><b>{c.hypothesis}</b><small>{c.evidence}</small></div></li>)}</ol></>}
+    {t.actions.length > 0 && <><h4>Next steps</h4>
+      <ul className="checklist">{t.actions.map((a, i) => <li key={i}><label><input type="checkbox" /> <span>{a.step}</span> <em>{a.owner}</em></label></li>)}</ul></>}
+    {t.notify.length > 0 && <><h4>Tell</h4>
+      <ul className="notify">{t.notify.map((n, i) => <li key={i}><b>{n.who}</b> {n.why}</li>)}</ul></>}
+    <h4>Message to send</h4>
+    <CodeBlock code={t.message} label="Copy message" />
+    <details className="steps"><summary>How the agent investigated ({t.steps.length} steps)</summary>
+      <ol>{t.steps.map((s, i) => <li key={i}><code>{s.tool}</code>{Object.values(s.input).length > 0 && ` ${Object.values(s.input).join(', ')}`}</li>)}</ol>
+      <small className="muted">Model: {t.model}. It only saw aggregate statistics, never rows.</small>
+    </details>
+  </section>
+}
+
+/** The drift model's column drivers, parsed from "amount (90%), quantity (9%)". */
+function DriftBars({ issue }: { issue: Issue }) {
+  const drivers = [...String(issue.measured.top_drivers || '').matchAll(/([^,]+?) \((\d+)%\)/g)].map(m => [m[1].trim(), Number(m[2])] as const)
+  const auc = Number(issue.measured.drift_auc)
+  return <div className="drift">
+    <div className="gauge" title="0.5 = the model can't tell the files apart, 1.0 = it always can">
+      <small>Drift score</small><b>{auc.toFixed(2)}</b>
+      <span className="track"><i style={{ width: `${Math.max(0, (auc - 0.5) / 0.5) * 100}%` }} /></span>
+      <small className="muted">0.5 same · 1.0 different</small>
+    </div>
+    <div className="drivers"><small>What gave it away</small>
+      {drivers.map(([col, pct]) => <div key={col} className="driver"><code>{col}</code><span className="track"><i style={{ width: `${pct}%` }} /></span><b>{pct}%</b></div>)}
+    </div>
+  </div>
 }
 
 const fmtValue = (v: unknown) => v === null || v === undefined ? 'n/a' : typeof v === 'boolean' ? (v ? 'yes' : 'no')
@@ -244,18 +314,41 @@ const CHEATSHEET: Array<[string, string]> = [
   ['categorical', 'Text values never seen in the baseline'],
   ['duplicates', 'Repeated key columns or whole rows'],
   ['distribution', 'Numbers shifting (PSI and mean shift)'],
+  ['ml_drift', 'A model learns to tell new rows from baseline rows; max_auc is the limit (0.5 = same)'],
   ['consumers', 'Dashboards, models or services and the columns they read'],
 ]
 
-function RulesTab({ detail, draft, setDraft, dirty, changed }:
-  { detail: ProjectDetail; draft: string; setDraft: (s: string) => void; dirty: boolean; changed: () => Promise<unknown> }) {
+function RulesTab({ detail, draft, setDraft, dirty, changed, ai }:
+  { detail: ProjectDetail; draft: string; setDraft: (s: string) => void; dirty: boolean; changed: () => Promise<unknown>; ai: boolean }) {
   const notify = useNotify()
   const [busy, run] = useAction()
   const [suggested, setSuggested] = useState('')
+  const [ask, setAsk] = useState('')
+  const [proposal, setProposal] = useState<RulesDraft | null>(null)
   const save = () => run('save', async () => { await api.saveRules(detail.id, draft); await changed(); notify.ok('Rules saved') })
+
+  const drafting = () => run('draft', async () => setProposal(await api.draftRules(detail.id, ask, draft)))
 
   return <div className="rules-layout">
     <div className="card">
+      <form className="ask" onSubmit={e => { e.preventDefault(); if (ask.trim().length > 2) drafting() }}>
+        <label htmlFor="ask"><Icon name="sparkle" size={14} /> Describe a change in plain English</label>
+        <div className="row">
+          <input id="ask" value={ask} onChange={e => setAsk(e.target.value)} disabled={!ai}
+            placeholder={ai ? 'e.g. order_id must be unique, and alert if amount shifts a lot' : 'Set ANTHROPIC_API_KEY on the server to use this'} />
+          <button className="button primary" disabled={!ai || ask.trim().length < 3 || !!busy}>{busy === 'draft' ? <Spinner text="Drafting…" /> : 'Draft'}</button>
+        </div>
+      </form>
+      {proposal && <div className="proposal">
+        <b>{proposal.summary}</b>
+        {proposal.not_supported.map(n => <p key={n} className="muted"><Icon name="info" size={13} /> Not possible as a rule: {n}</p>)}
+        <details><summary>Preview the full file</summary><CodeBlock code={proposal.config_yaml} /></details>
+        <div className="actions">
+          <button className="button primary" onClick={() => { setDraft(proposal.config_yaml); setProposal(null); setAsk('') }}>Put in editor</button>
+          <button className="button ghost" onClick={() => setProposal(null)}>Discard</button>
+          <span className="muted hint">Already validated. You still review and save it.</span>
+        </div>
+      </div>}
       <div className="card-head">
         <h2>datapulse.yml</h2>
         <span className="muted">{dirty ? 'Unsaved changes' : 'Saved'}</span>

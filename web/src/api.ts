@@ -13,8 +13,15 @@ export type Issue = {
 export type Report = {
   status: 'passed' | 'failed'; issues: Issue[]; rows: { baseline: number; current: number }
   passed_checks: string[]; affected_consumers: string[]; schema_changed: boolean; data_file: string
-  ai_note?: string | null; markdown?: string
+  ai_note?: string | null; markdown?: string; triage?: Triage | null
 }
+export type Triage = {
+  headline: string; verdict: 'block' | 'investigate' | 'safe_to_ship'; verdict_reason: string
+  root_causes: Array<{ hypothesis: string; confidence: 'low' | 'medium' | 'high'; evidence: string }>
+  actions: Array<{ step: string; owner: string }>; notify: Array<{ who: string; why: string }>; message: string
+  steps: Array<{ tool: string; input: Record<string, unknown> }>; model: string
+}
+export type RulesDraft = { config_yaml: string; summary: string; not_supported: string[] }
 export type Run = { id: string; status: string; issue_count: number; created_at: string; report: Report }
 export type Project = { id: string; name: string; has_baseline: boolean; run_count: number; latest_status?: string | null }
 export type ColumnStats = { kind: string; dtype: string; null_rate: number | null; unique_count: number | null }
@@ -42,13 +49,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
-  health: () => request<{ version: string }>('GET', '/api/health'),
+  health: () => request<{ version: string; ai: boolean }>('GET', '/api/health'),
   projects: () => request<Project[]>('GET', '/api/projects'),
   project: (id: string) => request<ProjectDetail>('GET', `/api/projects/${id}`),
   create: (name: string) => request<Created>('POST', '/api/projects', { name }),
   seed: () => request<Created>('POST', '/api/demo/seed'),
   remove: (id: string) => request('DELETE', `/api/projects/${id}`),
   saveRules: (id: string, config_yaml: string) => request('PUT', `/api/projects/${id}/config`, { config_yaml }),
+  triage: (id: string, run: string) => request<Triage>('POST', `/api/projects/${id}/runs/${run}/triage`),
+  draftRules: (id: string, req: string, config_yaml: string) =>
+    request<RulesDraft>('POST', `/api/projects/${id}/rules/draft`, { request: req, config_yaml }),
   suggestions: (id: string) => request<{ yaml: string }>('GET', `/api/projects/${id}/suggestions`),
   upload(id: string, kind: 'baseline' | 'runs', file: File, useAi = false) {
     const form = new FormData()

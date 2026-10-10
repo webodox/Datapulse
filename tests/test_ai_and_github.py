@@ -7,6 +7,7 @@ from datapulse import ai, github
 from datapulse.checks import run_checks
 from datapulse.errors import DataPulseError
 from datapulse.profile import profile_dataframe
+from fake_claude import FakeClaude, text
 
 SECRET = "ZZ-SECRET-VALUE-123"
 
@@ -38,25 +39,19 @@ def test_without_api_key_deterministic_explanations_remain(baseline, cfg, df, mo
 
 def test_ai_explanations_are_attached_and_labelled(baseline, cfg, df, monkeypatch):
     monkeypatch.setenv(cfg.ai.api_key_env, "k")
-    seen = {}
-
-    def fake_post(url, headers, payload, timeout=45):
-        seen["body"] = json.dumps(payload)
-        text = json.dumps({"explanations": [{"index": 0, "text": "Likely a failed join."}]})
-        return {"content": [{"type": "text", "text": "Sure: " + text}]}
-
-    monkeypatch.setattr(ai, "_post", fake_post)
+    fake = FakeClaude([text(json.dumps({"explanations": [{"index": 0, "text": "Likely a failed join."}]}))])
+    monkeypatch.setattr(ai, "get_client", lambda cfg: fake)
     report = report_with_secret(baseline, cfg, df)
     assert "AI explanations added" in ai.explain_issues(report, cfg)
     assert report.issues[0].ai_explanation == "Likely a failed join."
-    assert SECRET not in seen["body"]
+    assert SECRET not in fake.sent() and fake.calls[0]["fallbacks"] == "default"
     from datapulse.report import render_markdown
     assert "AI-generated explanation" in render_markdown(report)
 
 
 def test_ai_failure_falls_back_gracefully(baseline, cfg, df, monkeypatch):
     monkeypatch.setenv(cfg.ai.api_key_env, "k")
-    monkeypatch.setattr(ai, "_post", lambda *a, **k: (_ for _ in ()).throw(DataPulseError("boom")))
+    monkeypatch.setattr(ai, "get_client", lambda cfg: FakeClaude([text("not json")]))
     report = report_with_secret(baseline, cfg, df)
     assert "unavailable" in ai.explain_issues(report, cfg)
     assert all(i.ai_explanation is None for i in report.issues)

@@ -35,11 +35,12 @@ function Shell() {
   const [route, go] = useRoute()
   const [projects, setProjects] = useState<Project[] | null>(null)
   const [offline, setOffline] = useState(false)
+  const [ai, setAi] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newKey, setNewKey] = useState<{ id: string; key: string } | null>(null)
 
   const refresh = useCallback(() => api.projects().then(list => { setProjects(list); setOffline(false) }, () => setOffline(true)), [])
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => { refresh(); api.health().then(h => setAi(h.ai), () => {}) }, [refresh])
 
   // Land on the first project when the URL doesn't name one that exists.
   useEffect(() => {
@@ -77,7 +78,7 @@ function Shell() {
       {offline ? <Offline retry={refresh} />
         : projects === null ? <div className="loading"><span className="spinner" /> Loading…</div>
         : !projects.length ? <Welcome onCreated={opened} />
-        : active && <ProjectView key={active.id} route={{ ...route, id: active.id }} go={go} onChanged={refresh}
+        : active && <ProjectView key={active.id} route={{ ...route, id: active.id }} go={go} onChanged={refresh} ai={ai}
             apiKey={newKey?.id === active.id ? newKey.key : undefined} dismissKey={() => setNewKey(null)} />}
     </main>
 
@@ -103,13 +104,14 @@ function Welcome({ onCreated }: { onCreated: (c: Created) => void }) {
   const [busy, run] = useAction()
   const notify = useNotify()
   return <div className="center-card wide">
-    <h1>Catch data changes before they break things</h1>
-    <p>DataPulse learns what your data normally looks like, then checks every new file against it:
-      missing columns, type changes, nulls, duplicates, new categories and shifted numbers.</p>
+    <h1>Your AI data-quality engineer</h1>
+    <p>DataPulse catches bad data before it reaches your dashboards and models, then does the on-call
+      work for you: it finds the likely cause, says whether to block the release, and writes the message to
+      the people affected.</p>
     <ol className="how">
-      <li><b>Save a baseline</b><span>Upload a file you trust.</span></li>
-      <li><b>Check new data</b><span>Upload each new version and see what changed.</span></li>
-      <li><b>Know who's affected</b><span>Map the dashboards and models that use each column.</span></li>
+      <li><b>Save a baseline</b><span>Upload a file you trust. DataPulse learns what normal looks like.</span></li>
+      <li><b>Check every new batch</b><span>Rules plus a machine-learning drift model spot what changed, even subtle shifts.</span></li>
+      <li><b>Let the AI agent triage</b><span>It investigates, ranks root causes, and drafts the fix plan and message.</span></li>
     </ol>
     <div className="welcome-actions">
       <CreateProject onCreated={onCreated} />

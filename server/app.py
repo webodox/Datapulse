@@ -23,12 +23,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from datapulse import __version__
-from datapulse.ai import explain_issues
+from datapulse.agent import TriageContext, run_triage
+from datapulse.ai import draft_rules, explain_issues, get_api_key
 from datapulse.baseline import build_baseline, describe
 from datapulse.checks import run_checks
 from datapulse.config import STARTER_CONFIG, Config, parse_config_text
 from datapulse.errors import DataPulseError
 from datapulse.io import SUPPORTED, load_dataframe
+from datapulse.profile import profile_dataframe
 from datapulse.report import render_json, render_markdown
 from datapulse.suggest import render_yaml, suggest_rules
 
@@ -128,6 +130,11 @@ class SaveConfig(BaseModel):
     config_yaml: str = Field(max_length=20_000)
 
 
+class DraftRules(BaseModel):
+    request: str = Field(min_length=3, max_length=2_000)
+    config_yaml: str = Field(max_length=20_000)  # the editor's current text, saved or not
+
+
 class IngestRows(BaseModel):
     dataset_name: str = Field(min_length=1, max_length=100)
     role: Literal["baseline", "candidate"] = "candidate"
@@ -205,13 +212,23 @@ def _save_baseline(project: sqlite3.Row, name: str, path: Path, df: pd.DataFrame
     return {"dataset_id": dataset_id, "role": "baseline", "baseline": _baseline_summary(data)}
 
 
+def _dataset_rows(dataset_id: Optional[str]) -> Optional[pd.DataFrame]:
+    """A stored dataset's rows, or None when the file is gone (older projects, cleaned-up uploads)."""
+    with connect() as db:
+        row = db.execute("SELECT filename FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
+    try:
+        return load_dataframe(row["filename"]) if row else None
+    except DataPulseError:
+        return None
+
+
 def _run_check(project: sqlite3.Row, name: str, path: Path, df: pd.DataFrame, use_ai: bool) -> Dict[str, Any]:
     if not project["baseline_json"]:
         raise HTTPException(409, "Create a baseline dataset before running a check")
     cfg = _config(project["config_yaml"])
     baseline = json.loads(project["baseline_json"])
     report = run_checks(baseline, df, cfg, data_file=name, baseline_label=describe(baseline, "project baseline"),
-                        config_label=CONFIG_LABEL)
+                        config_label=CONFIG_LABEL, reference=_dataset_rows(project["baseline_dataset_id"]))
     ai_note = explain_issues(report, cfg) if use_ai else ""
     doc = json.loads(render_json(report))
     dataset_id = _record_dataset(project["id"], name, path, "candidate", df)
@@ -237,7 +254,7 @@ def _handle(project_id: str, name: str, path: Path, role: str, use_ai: bool = Fa
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "version": __version__}
+    return {"status": "ok", "version": __version__, "ai": bool(get_api_key(Config()))}
 
 
 @app.get("/api/projects")
@@ -371,6 +388,52 @@ def seed_demo() -> dict:
     project = _create_project("Orders pipeline", config_text)
     _save_baseline(_project(project["id"]), sample.name, sample, load_dataframe(sample))
     return {**project, "has_baseline": True}
+
+
+def _ai(call):
+    """Run an AI feature; configuration and upstream problems become readable HTTP errors."""
+    try:
+        return call()
+    except DataPulseError as exc:
+        raise HTTPException(503 if "environment variable" in str(exc) else 502, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/runs/{run_id}/triage")
+def triage_run(project_id: str, run_id: str) -> dict:
+    """Let the AI triage agent investigate a run and write the incident note. Saved with the run."""
+    project = _project(project_id)
+    with connect() as db:
+        run = db.execute("SELECT dataset_id, report_json FROM runs WHERE id = ? AND project_id = ?",
+                         (run_id, project_id)).fetchone()
+        history = db.execute("SELECT created_at, status, issue_count, report_json FROM runs WHERE project_id = ? "
+                             "AND id != ? ORDER BY created_at DESC, rowid DESC LIMIT 15", (project_id, run_id)).fetchall()
+    if run is None:
+        raise HTTPException(404, "Run not found")
+    doc = json.loads(run["report_json"])
+    if not doc["issues"]:
+        raise HTTPException(409, "This run passed cleanly; there is nothing to triage")
+    cfg = _config(project["config_yaml"])
+    current = _dataset_rows(run["dataset_id"])
+    ctx = TriageContext(
+        doc, json.loads(project["baseline_json"])["profile"],
+        profile_dataframe(current, cfg.max_categories) if current is not None else None,
+        history=[{"when": h["created_at"], "status": h["status"], "issue_count": h["issue_count"],
+                  "failing": sorted({f"{i['check']}:{','.join(i['columns'])}" for i in json.loads(h["report_json"])["issues"]})}
+                 for h in history],
+        consumers=[vars(c) for c in cfg.consumers])
+    doc["triage"] = _ai(lambda: run_triage(ctx, cfg))
+    with connect() as db:
+        db.execute("UPDATE runs SET report_json = ? WHERE id = ?", (json.dumps(doc), run_id))
+    return doc["triage"]
+
+
+@app.post("/api/projects/{project_id}/rules/draft")
+def draft_project_rules(project_id: str, payload: DraftRules) -> dict:
+    """Turn a plain-English request into a complete, validated datapulse.yml. Nothing is saved."""
+    project = _project(project_id)
+    cfg = _config(project["config_yaml"])
+    profile = json.loads(project["baseline_json"])["profile"] if project["baseline_json"] else None
+    return _ai(lambda: draft_rules(payload.request, payload.config_yaml, profile, cfg))
 
 
 @app.get("/api/projects/{project_id}/runs/{run_id}")
