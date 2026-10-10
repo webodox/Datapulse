@@ -19,10 +19,16 @@ export type Triage = {
   headline: string; verdict: 'block' | 'investigate' | 'safe_to_ship'; verdict_reason: string
   root_causes: Array<{ hypothesis: string; confidence: 'low' | 'medium' | 'high'; evidence: string }>
   actions: Array<{ step: string; owner: string }>; notify: Array<{ who: string; why: string }>; message: string
-  steps: Array<{ tool: string; input: Record<string, unknown> }>; model: string
+  steps: Array<{ tool: string; input: Record<string, unknown> }>; model: string; by?: string; at?: string
 }
 export type RulesDraft = { config_yaml: string; summary: string; not_supported: string[] }
-export type Run = { id: string; status: string; issue_count: number; created_at: string; report: Report }
+export type ReviewStatus = 'open' | 'acknowledged' | 'resolved'
+export type Review = { status: ReviewStatus; by?: string | null; at?: string | null }
+export type Run = {
+  id: string; status: string; issue_count: number; created_at: string; report: Report
+  created_by?: string | null; review: Review
+}
+export type User = { id: string; name: string; email: string; role: 'admin' | 'member' }
 export type Project = { id: string; name: string; has_baseline: boolean; run_count: number; latest_status?: string | null }
 export type ColumnStats = { kind: string; dtype: string; null_rate: number | null; unique_count: number | null }
 export type Baseline = { baseline_version: number; rows: number; source?: string; created_at?: string; columns: Record<string, ColumnStats> }
@@ -37,7 +43,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const init: RequestInit = { method }
   if (body instanceof FormData) init.body = body
   else if (body !== undefined) Object.assign(init, { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
-  const response = await fetch(`${API}${path}`, init)
+  const response = await fetch(`${API}${path}`, { ...init, credentials: 'include' })
+  // A session that expired or was revoked sends everyone back to the sign-in screen.
+  if (response.status === 401 && !path.startsWith('/api/auth/')) window.dispatchEvent(new Event('datapulse:signed-out'))
   if (!response.ok) {
     const detail = await response.json().then(b => b.detail, () => null)
     // FastAPI validation errors arrive as a list of {msg} objects
@@ -49,6 +57,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
+  authStatus: () => request<{ setup_needed: boolean; user: User | null }>('GET', '/api/auth/status'),
+  setup: (name: string, email: string, password: string) => request<User>('POST', '/api/auth/setup', { name, email, password }),
+  login: (email: string, password: string) => request<User>('POST', '/api/auth/login', { email, password }),
+  logout: () => request('POST', '/api/auth/logout'),
+  changePassword: (current_password: string, new_password: string) =>
+    request('PUT', '/api/auth/password', { current_password, new_password }),
+  users: () => request<User[]>('GET', '/api/users'),
+  addUser: (u: { name: string; email: string; password: string; role: User['role'] }) => request<User>('POST', '/api/users', u),
+  removeUser: (id: string) => request('DELETE', `/api/users/${id}`),
+  review: (id: string, run: string, status: ReviewStatus) => request<Review>('PUT', `/api/projects/${id}/runs/${run}/review`, { status }),
   health: () => request<{ version: string; ai: boolean }>('GET', '/api/health'),
   projects: () => request<Project[]>('GET', '/api/projects'),
   project: (id: string) => request<ProjectDetail>('GET', `/api/projects/${id}`),

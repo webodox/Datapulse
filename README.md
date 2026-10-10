@@ -107,9 +107,25 @@ Send `"role": "baseline"` first (each re-baseline bumps `baseline_version`), the
 request takes up to 50,000 rows. The response is the JSON report (`status`, `issues`, `affected_consumers`, ...).
 `"use_ai": true` adds AI explanations when `ANTHROPIC_API_KEY` is set for the server (see `.env.example`).
 
-Data is stored under `DATAPULSE_HOME` (default `.datapulse/`): uploaded files, baselines and reports. Only
-`/ingest` checks a key; the dashboard endpoints have no login, so run the service on a trusted network or put
-your own authentication in front of it.
+Data is stored under `DATAPULSE_HOME` (default `.datapulse/`): uploaded files, baselines, reports and accounts.
+
+### Running it for your team
+
+Run **one** shared copy and have everyone open it, rather than each person running their own. Everyone then sees
+the same projects, checks and AI triage, and only that one server needs an `ANTHROPIC_API_KEY`.
+
+1. On a machine everyone can reach (a server, a cloud VM, or one teammate's computer on the office network), put
+   the key in `.env` and run `docker compose up -d --build`.
+2. Open `http://<that-machine>:8080`. The first person to open a fresh install creates the **admin** account.
+3. The admin adds teammates under **Account & team** (name, email, temporary password). Teammates sign in and can
+   change their password there.
+4. On a failed check, anyone can set **Open / Acknowledged / Resolved**; the dashboard shows who did it and when,
+   who ran each check, and who requested each AI triage.
+
+Every `/api` route needs a signed-in user except `/api/health`, sign-in itself, and `/ingest`, which uses the
+project's API key so other services can send data. Passwords are stored as scrypt hashes; sessions are HttpOnly
+cookies that last 14 days. If the dashboard is reachable from the internet, serve it over HTTPS (for example behind
+a reverse proxy) and set `DATAPULSE_SECURE_COOKIES=1`.
 
 ## Running it without Python
 

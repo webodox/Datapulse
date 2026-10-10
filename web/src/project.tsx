@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, API_ORIGIN, fmtDate, plural, runTone, timeAgo, SEVERITIES, TONE_LABEL,
-  type Issue, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft } from './api'
+  type Issue, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft, type ReviewStatus } from './api'
 import type { Route } from './App'
 import { Icon, type IconName } from './icons'
 import { CodeBlock, copyText, Dropzone, Empty, Spinner, useAction, useNotify } from './ui'
@@ -102,11 +102,11 @@ function ChecksTab({ detail, runId, select, changed, ai }: { detail: ProjectDeta
       <Dropzone title="Drop a new version of the data to check it" hint={`Compared against baseline v${detail.baseline?.baseline_version} · CSV, JSON, JSONL or Parquet`}
         busy={busy && 'Checking your data…'} onFile={check} />
       <label className="toggle"><input type="checkbox" checked={useAi} onChange={e => setUseAi(e.target.checked)} />
-        Add AI explanations <small>(sends aggregate statistics only, never rows; needs ANTHROPIC_API_KEY on the server)</small></label>
+        Add AI explanations to each issue</label>
     </div>
     {viewed ? <div className="checks-layout">
       <RunHistory runs={detail.runs} selected={viewed.id} select={select} />
-      <RunReport key={viewed.id} run={viewed} isLatest={viewed.id === detail.runs[0].id} projectId={detail.id} ai={ai} changed={changed} />
+      <RunReport key={viewed.id} run={viewed} projectId={detail.id} ai={ai} changed={changed} />
     </div> : <Empty icon="activity" title="No checks yet"><span>Drop a file above. Results and history appear here.</span></Empty>}
   </>
 }
@@ -123,14 +123,14 @@ function RunHistory({ runs, selected, select }: { runs: Run[]; selected: string;
     <ul>
       {runs.map(r => <li key={r.id}><button className={r.id === selected ? 'on' : ''} onClick={() => select(r.id)}>
         <ToneIcon tone={runTone(r)} />
-        <span><b>{r.report.data_file || 'Upload'}</b><small>{fmtDate(r.created_at)}</small></span>
+        <span><b>{r.report.data_file || 'Upload'}</b><small>{fmtDate(r.created_at)}{r.issue_count > 0 && r.review.status !== 'open' && ` · ${REVIEW[r.review.status]}`}</small></span>
         <em className={runTone(r)}>{r.issue_count || '✓'}</em>
       </button></li>)}
     </ul>
   </aside>
 }
 
-function RunReport({ run, isLatest, projectId, ai, changed }: { run: Run; isLatest: boolean; projectId: string; ai: boolean; changed: () => Promise<unknown> }) {
+function RunReport({ run, projectId, ai, changed }: { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown> }) {
   const notify = useNotify()
   const [filter, setFilter] = useState<Severity | null>(null)
   const { report } = run
@@ -143,13 +143,13 @@ function RunReport({ run, isLatest, projectId, ai, changed }: { run: Run; isLate
       <ToneIcon tone={tone} big />
       <div>
         <h2>{tone === 'failed' ? 'This data would break things' : tone === 'issues' ? 'Passed, with warnings' : 'Everything looks normal'}</h2>
-        <p>{report.data_file} · {fmtDate(run.created_at)}{!isLatest && ' · earlier check'} · {report.rows.current.toLocaleString()} rows
-          ({report.rows.current >= report.rows.baseline ? '+' : ''}{(report.rows.current - report.rows.baseline).toLocaleString()} vs baseline)</p>
+        <p>{report.data_file} · {fmtDate(run.created_at)} · {report.rows.current.toLocaleString()} rows{run.created_by && ` · checked by ${run.created_by}`}</p>
       </div>
       {report.markdown && <button className="button ghost" onClick={() => copyText(report.markdown!, notify, 'Markdown report copied')}>
         <Icon name="copy" size={14} /> Copy report</button>}
     </div>
 
+    {report.issues.length > 0 && <ReviewBar run={run} projectId={projectId} changed={changed} />}
     {report.issues.length > 0 && <TriageSection run={run} projectId={projectId} ai={ai} changed={changed} />}
 
     {counts.length > 1 && <div className="filters">
@@ -173,8 +173,8 @@ function IssueCard({ issue }: { issue: Issue }) {
     </header>
     <p>{issue.measured_summary}</p>
     {issue.check === 'ml_drift' && <DriftBars issue={issue} />}
-    <p className="cause"><b>Possible cause</b> <small>(suggestion, not verified)</small> {issue.suggested_explanation}</p>
-    {issue.ai_explanation && <p className="cause ai"><b><Icon name="sparkle" size={12} /> AI suggestion</b> <small>(unverified)</small> {issue.ai_explanation}</p>}
+    <p className="cause"><b>Possible cause</b> {issue.suggested_explanation}</p>
+    {issue.ai_explanation && <p className="cause ai"><b><Icon name="sparkle" size={12} /> AI suggestion</b> {issue.ai_explanation}</p>}
     {issue.consumers.length > 0 && <p className="affects"><b>May affect</b>{issue.consumers.map(c =>
       <span key={c.name} className="chip" title={c.dataset_wide ? 'Reads this dataset' : `Uses ${c.columns.join(', ')}`}>{c.name}</span>)}</p>}
     {(measured.length > 0 || issue.examples.length > 0) && <details>
@@ -184,6 +184,23 @@ function IssueCard({ issue }: { issue: Issue }) {
       <small className="muted">Check: <code>{issue.check}</code></small>
     </details>}
   </article>
+}
+
+/* ---------- shared issue status ---------- */
+
+const REVIEW: Record<ReviewStatus, string> = { open: 'Open', acknowledged: 'Acknowledged', resolved: 'Resolved' }
+
+function ReviewBar({ run, projectId, changed }: { run: Run; projectId: string; changed: () => Promise<unknown> }) {
+  const [busy, act] = useAction()
+  const { status, by, at } = run.review
+  return <div className="review">
+    <div className="segmented" role="group" aria-label="Issue status">
+      {(Object.keys(REVIEW) as ReviewStatus[]).map(s => <button key={s} className={`${s} ${status === s ? 'on' : ''}`} disabled={!!busy}
+        aria-pressed={status === s} onClick={() => status !== s && act(s, async () => { await api.review(projectId, run.id, s); await changed() })}>
+        {REVIEW[s]}</button>)}
+    </div>
+    <small className="muted">{by ? `${REVIEW[status]} by ${by} · ${timeAgo(at || undefined)}` : 'Nobody has picked this up yet'}</small>
+  </div>
 }
 
 /* ---------- AI triage agent ---------- */
@@ -202,9 +219,9 @@ function TriageSection({ run, projectId, ai, changed }: { run: Run; projectId: s
     <span className="triage-icon"><Icon name="sparkle" size={18} /></span>
     <div>
       <b>{busy ? 'The AI agent is investigating…' : 'Let the AI agent triage this'}</b>
-      <small>{busy ? 'Reading the issues, column statistics, history and consumers. Usually 15–40 seconds.'
-        : ai ? 'It works out the likely cause, whether to block, the fix steps, who to tell, and drafts the message.'
-        : 'AI is off: set ANTHROPIC_API_KEY for the server to turn it on (see .env.example).'}</small>
+      <small>{busy ? 'This takes about 30 seconds.'
+        : ai ? 'Finds the likely cause, whether to block, next steps and who to tell.'
+        : 'AI is off. Add ANTHROPIC_API_KEY to .env to turn it on.'}</small>
     </div>
     <button className="button primary" disabled={!ai || !!busy} onClick={() => act('triage', async () => { await api.triage(projectId, run.id); await changed() })}>
       {busy ? <Spinner text="Investigating…" /> : <><Icon name="sparkle" size={14} /> Triage with AI</>}
@@ -217,7 +234,7 @@ function TriagePanel({ triage: t }: { triage: Triage }) {
   return <section className="triage">
     <header>
       <span className={`pill verdict ${v.tone}`}><Icon name={v.icon} size={12} /> {v.label}</span>
-      <small className="muted"><Icon name="sparkle" size={12} /> AI triage · verify before acting</small>
+      <small className="muted"><Icon name="sparkle" size={12} /> AI triage{t.by && ` · requested by ${t.by}`}</small>
     </header>
     <h3>{t.headline}</h3>
     <p className="muted">{t.verdict_reason}</p>
@@ -232,7 +249,6 @@ function TriagePanel({ triage: t }: { triage: Triage }) {
     <CodeBlock code={t.message} label="Copy message" />
     <details className="steps"><summary>How the agent investigated ({t.steps.length} steps)</summary>
       <ol>{t.steps.map((s, i) => <li key={i}><code>{s.tool}</code>{Object.values(s.input).length > 0 && ` ${Object.values(s.input).join(', ')}`}</li>)}</ol>
-      <small className="muted">Model: {t.model}. It only saw aggregate statistics, never rows.</small>
     </details>
   </section>
 }
@@ -346,7 +362,6 @@ function RulesTab({ detail, draft, setDraft, dirty, changed, ai }:
         <div className="actions">
           <button className="button primary" onClick={() => { setDraft(proposal.config_yaml); setProposal(null); setAsk('') }}>Put in editor</button>
           <button className="button ghost" onClick={() => setProposal(null)}>Discard</button>
-          <span className="muted hint">Already validated. You still review and save it.</span>
         </div>
       </div>}
       <div className="card-head">
@@ -358,7 +373,7 @@ function RulesTab({ detail, draft, setDraft, dirty, changed, ai }:
       <div className="actions">
         <button className="button primary" onClick={save} disabled={!dirty || !!busy}>{busy === 'save' ? <Spinner text="Saving…" /> : 'Save rules'}</button>
         <button className="button ghost" onClick={() => setDraft(detail.config_yaml)} disabled={!dirty}>Discard changes</button>
-        <span className="muted hint">Ctrl/⌘ + S saves · validated exactly like the CLI</span>
+        <span className="muted hint">Ctrl+S to save</span>
       </div>
       {suggested && <><h3>Suggested from your baseline</h3><p className="muted">Nothing was applied. Copy the parts you want into the editor.</p><CodeBlock code={suggested} /></>}
     </div>

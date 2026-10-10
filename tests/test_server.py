@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from server import app as server  # noqa: E402
 
+ADMIN = {"name": "Ada Admin", "email": "ada@example.com", "password": "correct horse"}
+
 CONFIG = """\
 version: 1
 checks:
@@ -31,6 +33,7 @@ consumers:
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATAPULSE_HOME", str(tmp_path / "home"))
     with TestClient(server.app) as c:
+        assert c.post("/api/auth/setup", json=ADMIN).status_code == 200  # signed in as the first (admin) user
         yield c
 
 
@@ -183,3 +186,81 @@ def test_draft_rules_endpoint_validates_the_draft(client, project, monkeypatch):
     r = client.post(f"/api/projects/{project['id']}/rules/draft", json={"request": "fail on warnings", "config_yaml": CONFIG})
     assert r.status_code == 200 and r.json()["config_yaml"].endswith("fail_on: warning\n")
     assert client.get(f"/api/projects/{project['id']}").json()["fail_on"] == "critical"  # nothing saved
+
+
+
+# ---------- accounts and shared review ----------
+
+def test_everything_but_health_signin_and_ingest_needs_a_session(client, project):
+    client.post("/api/auth/logout")
+    assert client.get("/api/projects").status_code == 401
+    assert client.post("/api/demo/seed").status_code == 401
+    assert client.get("/api/health").status_code == 200
+    assert client.get("/api/auth/status").json() == {"setup_needed": False, "user": None}
+    rows = json.loads(make_df(60).to_json(orient="records"))
+    r = client.post(f"/api/projects/{project['id']}/ingest", headers={"X-DataPulse-Key": project["api_key"]},
+                    json={"dataset_name": "orders", "role": "baseline", "rows": rows})
+    assert r.status_code == 200  # machine-to-machine ingest keeps using the project key
+
+
+def test_setup_runs_once_and_login_is_checked(client, tmp_path):
+    assert client.post("/api/auth/setup", json={**ADMIN, "email": "eve@example.com"}).status_code == 409
+    client.post("/api/auth/logout")
+    assert client.post("/api/auth/login", json={"email": ADMIN["email"], "password": "wrong"}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": "nobody@example.com", "password": "x"}).status_code == 401
+    r = client.post("/api/auth/login", json={"email": "ADA@example.com ", "password": ADMIN["password"]})
+    assert r.status_code == 200 and r.json()["role"] == "admin"
+    assert client.get("/api/auth/status").json()["user"]["name"] == "Ada Admin"
+    import sqlite3
+    db = sqlite3.connect(tmp_path / "home" / "datapulse.sqlite3")
+    stored = db.execute("SELECT password_hash FROM users").fetchone()[0]
+    assert ADMIN["password"] not in stored and stored.startswith("scrypt$")
+
+
+def test_admin_manages_the_team_and_members_cannot(client):
+    member = {"name": "Mo Member", "email": "mo@example.com", "password": "member-pass"}
+    created = client.post("/api/users", json=member).json()
+    assert created["role"] == "member"
+    assert client.post("/api/users", json=member).status_code == 409  # duplicate email
+    assert client.post("/api/users", json={**member, "email": "x@y.z", "password": "short"}).status_code == 422
+    client.post("/api/auth/logout")
+    assert client.post("/api/auth/login", json={"email": member["email"], "password": member["password"]}).status_code == 200
+    assert client.get("/api/users").status_code == 403
+    assert client.post("/api/users", json={**member, "email": "z@y.z"}).status_code == 403
+    assert client.get("/api/projects").status_code == 200  # but can use the dashboard
+    assert client.put("/api/auth/password", json={"current_password": "nope", "new_password": "new-password"}).status_code == 403
+    assert client.put("/api/auth/password", json={"current_password": "member-pass", "new_password": "new-password"}).status_code == 200
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={"email": ADMIN["email"], "password": ADMIN["password"]})
+    me = client.get("/api/auth/status").json()["user"]
+    assert client.delete(f"/api/users/{me['id']}").status_code == 409
+    assert client.delete(f"/api/users/{created['id']}").status_code == 200
+    assert client.post("/api/auth/login", json={"email": member["email"], "password": "new-password"}).status_code == 401
+
+
+def test_checks_record_who_ran_them_and_review_status_is_shared(client):
+    seeded = client.post("/api/demo/seed").json()
+    drifted = (ROOT / "examples" / "data" / "orders_drifted.csv").read_bytes()
+    doc = client.post(f"/api/projects/{seeded['id']}/runs", files={"file": ("d.csv", drifted, "text/csv")}).json()
+    run = client.get(f"/api/projects/{seeded['id']}").json()["runs"][0]
+    assert run["created_by"] == "Ada Admin" and run["review"]["status"] == "open"
+    url = f"/api/projects/{seeded['id']}/runs/{doc['run_id']}/review"
+    assert client.put(url, json={"status": "acknowledged"}).json()["by"] == "Ada Admin"
+    assert client.get(f"/api/projects/{seeded['id']}").json()["runs"][0]["review"]["status"] == "acknowledged"
+    assert client.put(url, json={"status": "done"}).status_code == 422
+    assert client.put(f"/api/projects/{seeded['id']}/runs/nope/review", json={"status": "resolved"}).status_code == 404
+
+
+def test_older_databases_are_upgraded_in_place(tmp_path, monkeypatch):
+    import sqlite3
+    monkeypatch.setenv("DATAPULSE_HOME", str(tmp_path / "old"))
+    (tmp_path / "old").mkdir()
+    db = sqlite3.connect(tmp_path / "old" / "datapulse.sqlite3")
+    db.execute("CREATE TABLE runs (id TEXT PRIMARY KEY, project_id TEXT, dataset_id TEXT, status TEXT, "
+               "issue_count INTEGER, report_json TEXT, created_at TEXT)")
+    db.execute("INSERT INTO runs VALUES ('r1', 'p', 'd', 'failed', 1, '{}', '2026-01-01')")
+    db.commit(); db.close()
+    with TestClient(server.app):
+        pass
+    db = sqlite3.connect(tmp_path / "old" / "datapulse.sqlite3")
+    assert db.execute("SELECT review_status, created_by FROM runs").fetchone() == ("open", None)
