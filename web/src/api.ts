@@ -15,8 +15,8 @@ export type Report = {
   passed_checks: string[]; affected_consumers: string[]; schema_changed: boolean; data_file: string
   ai_note?: string | null; markdown?: string; triage?: Triage | null
   charts?: Record<string, ColumnChart>; fix?: Fix | null
-  source?: { id: string; name: string; kind: string; rows_pulled: number; mapped: boolean; steps: string[]; problems: string[] }
-  unified?: { sources: Array<{ name: string; kind: string; rows: number; error: string | null; problems: string[] }> }
+  source?: { id: string; name: string; kind: string; type?: string; rows_pulled: number; mapped: boolean; steps: string[]; problems: string[] }
+  unified?: { sources: Array<{ name: string; kind: string; type?: string; rows: number; error: string | null; problems: string[] }> }
 }
 export type ColumnChart = {
   null_rate: [number, number | null]
@@ -30,12 +30,12 @@ export type Fix = {
   file_name: string; by?: string; at?: string
 }
 export type Investigation = { triage: Triage | null; fix: Fix | null; errors: Partial<Record<'triage' | 'fix', string>> }
-export type SourceField = { name: string; label: string; placeholder: string; secret: boolean; required: boolean; multiline: boolean; help: string }
-export type SourceKind = { kind: string; label: string; group: string; description: string; fields: SourceField[]; available: boolean; missing_packages: string[] }
+export type SourceField = { name: string; label: string; placeholder: string; secret: boolean; required: boolean; multiline: boolean; help: string; input: 'text' | 'file' }
+export type SourceKind = { kind: string; label: string; group: string; description: string; fields: SourceField[]; available: boolean; missing_packages: string[]; hidden: boolean }
 export type Step = { operation: string; args: Record<string, unknown>; reason: string; effect?: string }
 export type Mapping = Omit<Fix, 'file_name' | 'operations'> & { operations: Step[]; automatic_steps: number; source_columns: string[]; model: string | null; at?: string }
 export type Source = {
-  id: string; name: string; kind: string; settings: Record<string, string> & { saved_secrets?: string[] }
+  id: string; name: string; kind: string; type: string; settings: Record<string, string> & { saved_secrets?: string[] }
   status: 'standard' | 'mapped' | 'needs_mapping'; recipe: Step[]; proposal: Mapping | null
   last_pulled_at: string | null; last_run_id: string | null; created_by: string | null; created_at: string
 }
@@ -97,6 +97,11 @@ export const api = {
   sources: (id: string) => request<Source[]>('GET', `/api/projects/${id}/sources`),
   testSource: (id: string, kind: string, settings: Record<string, string>, source_id?: string) =>
     request<{ ok: boolean; message: string }>('POST', `/api/projects/${id}/sources/test`, { kind, settings, source_id }),
+  uploadSourceFile(id: string, file: File) {
+    const form = new FormData()
+    form.append('file', file)
+    return request<{ file: string; name: string }>('POST', `/api/projects/${id}/sources/files`, form)
+  },
   addSource: (id: string, form: SourceForm) => request<Source>('POST', `/api/projects/${id}/sources`, form),
   editSource: (id: string, sid: string, form: SourceForm) => request<Source>('PUT', `/api/projects/${id}/sources/${sid}`, form),
   removeSource: (id: string, sid: string) => request('DELETE', `/api/projects/${id}/sources/${sid}`),

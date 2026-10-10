@@ -5,22 +5,25 @@ Secrets (passwords, connection URLs) stay in the server's database and are never
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import sqlite3
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from datapulse.errors import DataPulseError
-from datapulse.io import load_dataframe
+from datapulse.io import SUPPORTED, load_dataframe
 from datapulse.samples import write_samples
-from datapulse.sources import catalog, clean_settings, fetch_source, public_settings, try_connection
+from datapulse.sources import catalog, clean_settings, fetch_source, public_settings, try_connection, type_of
 from datapulse.unify import SOURCE_COLUMN, apply_recipe, combine, propose_mapping, validate_recipe
 
-from .core import ROOT, ai_call, dataset_rows, loads, project_config, project_row, run_check, save_baseline
-from .db import allow_sample_sources, connect, now_iso, samples_dir, upload_dir
+from .core import MAX_UPLOAD_BYTES, ROOT, ai_call, dataset_rows, loads, project_config, project_row, run_check, save_baseline
+from .db import configure_sources, connect, now_iso, samples_dir, source_files_dir, upload_dir
 
 router = APIRouter(prefix="/api")
 
@@ -55,9 +58,10 @@ def _source(project_id: str, source_id: str) -> sqlite3.Row:
 
 def _public(row: sqlite3.Row) -> Dict[str, Any]:
     recipe = loads(row["recipe_json"])
+    settings = json.loads(row["settings_json"])
     return {
-        "id": row["id"], "name": row["name"], "kind": row["kind"],
-        "settings": public_settings(row["kind"], json.loads(row["settings_json"])),
+        "id": row["id"], "name": row["name"], "kind": row["kind"], "type": type_of(row["kind"], settings),
+        "settings": public_settings(row["kind"], settings),
         "status": "standard" if row["is_standard"] else "mapped" if recipe is not None else "needs_mapping",
         "recipe": recipe or [], "proposal": loads(row["proposal_json"]),
         "last_pulled_at": row["last_pulled_at"], "last_run_id": row["last_run_id"],
@@ -107,13 +111,38 @@ def _make_standard(project: sqlite3.Row, row: sqlite3.Row, df: pd.DataFrame) -> 
 
 def add_sample_sources(project_id: str, actor: str) -> None:
     """Three sample databases holding the same orders in different formats; the first one is the standard."""
-    allow_sample_sources()
+    configure_sources()
     orders = load_dataframe(ROOT / "examples" / "data" / "orders.csv")
     for n, sample in enumerate(write_samples(orders, samples_dir() / project_id)):
         source_id = _create(project_id, sample["name"], "sqlite", {"path": sample["path"], "query": sample["query"]}, actor)
         if n == 0:
             row = _source(project_id, source_id)
             _make_standard(project_row(project_id), row, _fetch(row))
+
+
+def remove_uploaded_files(rows) -> None:
+    """Delete the uploaded files behind File sources (when the source or its project is deleted)."""
+    for row in rows:
+        stored = json.loads(row["settings_json"]).get("file", "") if row["kind"] == "file" else ""
+        if re.fullmatch(r"[0-9a-f]{32}/[^/\\]+", stored):
+            shutil.rmtree(source_files_dir() / stored.split("/")[0], ignore_errors=True)
+
+
+@router.post("/projects/{project_id}/sources/files")
+async def upload_source_file(project_id: str, file: UploadFile = File(...)) -> dict:
+    """Store a file for a File source. Returns the id to save in the source's settings."""
+    project_row(project_id)
+    name = re.sub(r"[^\w.\- ]", "_", Path(file.filename or "data.csv").name).strip() or "data.csv"
+    if Path(name).suffix.lower() not in SUPPORTED:
+        raise HTTPException(415, "Supported files: CSV, JSON, JSONL/NDJSON and Parquet")
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "The file is larger than 25 MB")
+    upload_id = uuid.uuid4().hex
+    folder = source_files_dir() / upload_id
+    folder.mkdir(parents=True)
+    (folder / name).write_bytes(content)
+    return {"file": f"{upload_id}/{name}", "name": name}
 
 
 @router.get("/sources/catalog")
@@ -162,13 +191,15 @@ def edit_source(project_id: str, source_id: str, payload: SourceForm) -> dict:
         settings = clean_settings(row["kind"], payload.settings, json.loads(row["settings_json"]))
     except DataPulseError as exc:
         raise _fail(exc) from exc
+    if row["kind"] == "file" and settings.get("file") != json.loads(row["settings_json"]).get("file"):
+        remove_uploaded_files([row])  # a newer version replaced it
     _update(source_id, name=payload.name.strip(), settings_json=json.dumps(settings))
     return _public(_source(project_id, source_id))
 
 
 @router.delete("/projects/{project_id}/sources/{source_id}")
 def delete_source(project_id: str, source_id: str) -> dict:
-    _source(project_id, source_id)
+    remove_uploaded_files([_source(project_id, source_id)])
     with connect() as db:
         db.execute("DELETE FROM sources WHERE id = ?", (source_id,))
     return {"deleted": True}
@@ -221,7 +252,8 @@ def pull_source(project_id: str, source_id: str, payload: Pull, request: Request
         return _make_standard(project, row, df)
     recipe = loads(row["recipe_json"])
     mapped, effects, problems = apply_recipe(df, json.loads(project["baseline_json"])["profile"], recipe or [])
-    extra = {"source": {"id": row["id"], "name": row["name"], "kind": row["kind"], "rows_pulled": len(df),
+    extra = {"source": {"id": row["id"], "name": row["name"], "kind": row["kind"],
+                        "type": type_of(row["kind"], json.loads(row["settings_json"])), "rows_pulled": len(df),
                         "mapped": recipe is not None or bool(row["is_standard"]), "steps": effects, "problems": problems}}
     doc = run_check(project, row["name"], _store(mapped), mapped, False, actor, extra)
     _update(source_id, last_pulled_at=now_iso(), last_run_id=doc["run_id"])
@@ -245,13 +277,14 @@ def unify(project_id: str, request: Request) -> dict:
         try:
             df = fetch_source(row["kind"], json.loads(row["settings_json"]), row["name"])
         except DataPulseError as exc:
-            report.append({"name": row["name"], "kind": row["kind"], "rows": 0, "error": str(exc), "problems": []})
+            report.append({"name": row["name"], "kind": row["kind"], "type": type_of(row["kind"], json.loads(row["settings_json"])), "rows": 0, "error": str(exc), "problems": []})
             continue
         mapped, _, problems = apply_recipe(df, profile, loads(row["recipe_json"]) or [])
         label = row["name"] if row["name"] not in frames else f"{row['name']} ({row['id']})"
         frames[label] = mapped
         _update(row["id"], last_pulled_at=now_iso())
-        report.append({"name": row["name"], "kind": row["kind"], "rows": len(mapped), "error": None, "problems": problems})
+        report.append({"name": row["name"], "kind": row["kind"], "type": type_of(row["kind"], json.loads(row["settings_json"])),
+                       "rows": len(mapped), "error": None, "problems": problems})
     if not frames:
         raise HTTPException(502, "None of the sources could be read: "
                             + "; ".join(f"{r['name']}: {r['error']}" for r in report))

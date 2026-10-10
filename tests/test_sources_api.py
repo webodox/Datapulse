@@ -108,3 +108,33 @@ def test_investigate_runs_triage_and_repair_together(client, monkeypatch):
     assert done["errors"] == {} and done["fix"]["by"] == "Ada" and done["fix"]["after"]["total"] < 9
     saved = client.get(f"/api/projects/{seeded['id']}/runs/{doc['run_id']}").json()
     assert saved["triage"]["headline"] == "Amounts are in cents" and saved["fix"]["file_name"] == "d-fixed.csv"
+
+
+def test_file_sources_upload_replace_and_clean_up(client, tmp_path):
+    pid = client.post("/api/projects", json={"name": "Files"}).json()["id"]
+    base = f"/api/projects/{pid}"
+    files = tmp_path / "home" / "source_files"
+    assert client.post(f"{base}/sources/files", files={"file": ("x.exe", b"MZ", "application/octet-stream")}).status_code == 415
+    first = client.post(f"{base}/sources/files", files={"file": ("../March orders.csv", GOOD.to_csv(index=False).encode(), "text/csv")}).json()
+    assert first["name"] == "March orders.csv" and (files / first["file"]).is_file()
+    assert client.post(f"{base}/sources/test", json={"kind": "file", "settings": {"file": first["file"]}}).json()["ok"]
+    assert not client.post(f"{base}/sources/test", json={"kind": "file", "settings": {"file": "../../datapulse.sqlite3"}}).json()["ok"]
+
+    source = client.post(f"{base}/sources", json={"name": "March", "kind": "file", "settings": {"file": first["file"]}}).json()
+    assert source["type"] == "File"
+    assert client.post(f"{base}/sources/{source['id']}/pull", json={"role": "baseline"}).status_code == 200
+
+    second = client.post(f"{base}/sources/files", files={"file": ("april.csv", GOOD.head(450).to_csv(index=False).encode(), "text/csv")}).json()
+    client.put(f"{base}/sources/{source['id']}", json={"name": "March", "kind": "file", "settings": {"file": second["file"]}})
+    assert not (files / first["file"]).exists()  # the replaced version is removed
+    assert client.post(f"{base}/sources/{source['id']}/pull", json={}).json()["rows"]["current"] == 450
+
+    assert client.delete(base).status_code == 200
+    assert not (files / second["file"]).exists()
+
+
+def test_database_source_type_is_shown_without_the_url(client):
+    pid = client.post("/api/projects", json={"name": "DBs"}).json()["id"]
+    created = client.post(f"/api/projects/{pid}/sources", json={"name": "Shop", "kind": "database", "settings": {
+        "url": "mongodb+srv://ada:Hunter2-pw@cluster.mongodb.net/", "query": "shop.orders"}}).json()
+    assert created["type"] == "MongoDB" and created["settings"]["url"] == "" and "Hunter2" not in json.dumps(created)

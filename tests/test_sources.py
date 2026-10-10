@@ -24,6 +24,7 @@ GOOD = load_dataframe(EX / "data/orders.csv")
 
 def test_catalog_lists_every_plugin_with_its_form():
     kinds = {c["kind"]: c for c in sources.catalog()}
+    assert [c["kind"] for c in sources.catalog() if not c["hidden"]] == ["database", "file", "link"]
     assert {"postgres", "mysql", "sqlserver", "sql", "sqlite", "mongodb", "link"} <= set(kinds)
     assert [c["group"] for c in sources.catalog()][0] == "Databases"
     url = next(f for f in kinds["postgres"]["fields"] if f["name"] == "url")
@@ -165,3 +166,45 @@ def test_ai_mapping_uses_statistics_only(standard):
 def test_combine_tags_rows_with_their_source():
     out = combine({"A": GOOD.head(2), "B": GOOD.head(3).drop(columns=["country"])}, list(GOOD.columns))
     assert out[SOURCE_COLUMN].tolist() == ["A", "A", "B", "B", "B"] and out["country"].isna().sum() == 3
+
+
+# ---------- one "Database" source for every database ----------
+
+def test_database_type_is_detected_from_the_url():
+    from datapulse.sources.database import detect, type_label
+    cases = {"postgresql://u:p@db.supabase.co:5432/postgres": "postgres", "postgres://u:p@h/d": "postgres",
+             "mysql+pymysql://u:p@h/d": "mysql", "mariadb://h/d": "mysql", "mssql://u:p@h/d": "sqlserver",
+             "mongodb+srv://u:p@cluster.mongodb.net/": "mongodb", "snowflake://u:p@acct/db": "sql"}
+    assert {url: detect(url) for url in cases} == cases
+    assert type_label("mongodb://x") == "MongoDB" and type_label("snowflake://x") == "SQL database"
+    for bad in ["just text", "sqlite:///etc/passwd"]:
+        with pytest.raises(sources.SourceError):
+            detect(bad)
+
+
+def test_database_source_reads_mongodb_with_database_dot_collection(monkeypatch):
+    mongomock = pytest.importorskip("mongomock")
+    client = mongomock.MongoClient()
+    client.shop.orders.insert_many([{"order_id": 1, "customer": {"country": "US"}}, {"order_id": 2, "customer": {"country": "DE"}}])
+    monkeypatch.setattr(MongoDB, "client", lambda self, settings: client)
+    monkeypatch.setattr(client, "close", lambda: None)
+    settings = {"url": "mongodb://user:pw@host/", "query": "shop.orders"}
+    assert sources.try_connection("database", settings).startswith("MongoDB: Connected")
+    assert sources.fetch_source("database", settings)["customer.country"].tolist() == ["US", "DE"]
+    assert sources.type_of("database", settings) == "MongoDB"
+
+
+def test_database_errors_name_the_detected_type_and_hide_the_password():
+    with pytest.raises(sources.SourceError) as err:
+        sources.try_connection("database", {"url": "postgresql://ada:Sup3r-Secret@127.0.0.1:1/db", "query": "t"})
+    assert str(err.value).startswith("PostgreSQL:") and "Sup3r-Secret" not in str(err.value)
+
+
+@pytest.mark.skipif(not os.getenv("DATAPULSE_TEST_POSTGRES_URL"), reason="needs DATAPULSE_TEST_POSTGRES_URL")
+def test_database_source_on_real_postgres():
+    from sqlalchemy import create_engine
+    url = os.environ["DATAPULSE_TEST_POSTGRES_URL"]
+    shop_shape(GOOD).to_sql("dp_test_db_source", create_engine(url.replace("postgresql://", "postgresql+psycopg://")),
+                            if_exists="replace", index=False)
+    assert sources.try_connection("database", {"url": url, "query": "dp_test_db_source"}).startswith("PostgreSQL: Connected")
+    assert len(sources.fetch_source("database", {"url": url, "query": "dp_test_db_source"})) == len(GOOD)

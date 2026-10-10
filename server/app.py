@@ -38,14 +38,14 @@ from .auth import current_user, needs_login, router as auth_router
 from .core import (MAX_INGEST_ROWS, MAX_UPLOAD_BYTES, ROOT, ai_call, baseline_summary, dataset_rows, handle_data,
                    loads, project_config, project_row, record_dataset, run_check, save_upload,
                    load_upload)
-from .db import allow_sample_sources, connect, init_db, now_iso, samples_dir, upload_dir
-from .sources import add_sample_sources, router as sources_router
+from .db import configure_sources, connect, init_db, now_iso, samples_dir, upload_dir
+from .sources import add_sample_sources, remove_uploaded_files, router as sources_router
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
-    allow_sample_sources()
+    configure_sources()
     yield
 
 
@@ -205,6 +205,8 @@ def delete_project(project_id: str) -> dict:
     with connect() as db:
         files = [Path(r["filename"]) for r in db.execute("SELECT filename FROM datasets WHERE project_id = ?",
                                                           (project_id,))]
+        remove_uploaded_files(db.execute("SELECT kind, settings_json FROM sources WHERE project_id = ?",
+                                         (project_id,)).fetchall())
         for table, column in (("runs", "project_id"), ("sources", "project_id"), ("datasets", "project_id"),
                               ("projects", "id")):
             db.execute(f"DELETE FROM {table} WHERE {column} = ?", (project_id,))
