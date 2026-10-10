@@ -102,3 +102,12 @@ def test_workspace_header_is_sent_only_when_configured(cfg, monkeypatch):
     assert "anthropic-workspace-id" not in ai.get_client(cfg).default_headers
     monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_123")
     assert ai.get_client(cfg).default_headers["anthropic-workspace-id"] == "wrkspc_123"
+
+
+def test_pasted_key_whitespace_is_trimmed(cfg, monkeypatch):
+    """A key pasted with a trailing newline used to fail every request as "Connection error"."""
+    monkeypatch.setenv(cfg.ai.api_key_env, "  sk-ant-test\r\n")
+    assert ai.get_api_key(cfg) == "sk-ant-test"
+    assert ai.get_client(cfg).api_key == "sk-ant-test"
+    monkeypatch.setenv(cfg.ai.api_key_env, " \n")
+    assert ai.get_api_key(cfg) is None  # whitespace only counts as "not set"
