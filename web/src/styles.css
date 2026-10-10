@@ -483,18 +483,6 @@ em.bad { color: var(--crit-text); font-style: normal }
 .flow-status.clean { color: var(--good-text) } .flow-status.issues { color: var(--warn-text) } .flow-status.failed { color: var(--crit-text) }
 .flow-status { font-weight: 600 }
 
-/* ---------- trend chart ---------- */
-.trend .segmented .on { background: var(--accent-soft); color: var(--ink) }
-.trend svg { min-width: 420px }
-.trend .seg.critical { fill: var(--crit) } .trend .seg.warning { fill: var(--warn) } .trend .seg.info { fill: var(--info) } .trend .seg.clean { fill: var(--good) }
-.trend g { cursor: pointer }
-.trend g.dim .seg { opacity: .35 }
-.trend .status.clean { fill: var(--good) } .trend .status.issues { fill: var(--warn) } .trend .status.failed { fill: var(--crit) }
-.trend .rows-line { fill: none; stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 3 3; pointer-events: none }
-.sw.crit { background: var(--crit) } .sw.warn { background: var(--warn) } .sw.inf { background: var(--info) }
-.sw.line { height: 2px; background: var(--ink-2) }
-.trend .chart-legend { margin-top: 6px }
-
 /* ---------- their column → our column ---------- */
 .compare { display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: var(--surface) }
 .compare-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap }

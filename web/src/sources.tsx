@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, plural, runTone, timeAgo, type Destination, type DestinationForm, type Mapping, type ProjectDetail, type Run, type Source, type SourceKind, type Step } from './api'
-import { FlowDiagram, HealthCards, lastCheckOf, MappingCompare, TrendChart } from './flow'
+import { FlowDiagram, HealthCards, lastCheckOf, MappingCompare } from './flow'
 import { Icon, type IconName } from './icons'
 import { Empty, Modal, Spinner, useAction, useNotify } from './ui'
 
@@ -88,7 +88,6 @@ export function SourcesTab({ detail, changed, ai, openRun }:
     <HealthCards detail={detail} sources={list} />
     {list.length > 0 && <FlowDiagram detail={detail} sources={list} icon={k => KIND_ICON[k] || 'database'} openRun={openRun}
       unify={unify} unifying={busy === 'unify'} canUnify={ready.length > 0} />}
-    <TrendChart runs={detail.runs} openRun={openRun} />
 
     {list.length === 0 ? <Empty icon="plug" title="No sources yet">
       <span>Any database, a file, a link, a REST API, Google Drive or a web page. Use test data to try one without your own credentials.</span>

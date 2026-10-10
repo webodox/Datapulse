@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, fmtDate, plural, runTone, timeAgo, type ColumnSide, type ComparedColumn, type Comparison, type ProjectDetail,
+import { api, plural, runTone, timeAgo, type ColumnSide, type ComparedColumn, type Comparison, type ProjectDetail,
   type Run, type Severity, type Source, type Step, type Tone } from './api'
 import { Icon, type IconName } from './icons'
 import { Spinner } from './ui'
@@ -110,66 +110,6 @@ export function FlowDiagram({ detail, sources, icon, openRun, unify, unifying, c
         </> : <span className="muted">Not unified yet</span>}
         {detail.has_baseline && <button className="button primary small-btn" disabled={!canUnify || unifying} onClick={unify}>
           {unifying ? <Spinner text="Unifying…" /> : unified ? 'Unify again' : 'Unify now'}</button>}
-      </div>
-    </div>}
-  </section>
-}
-
-/* ---------- trend chart ---------- */
-
-const SEV: Severity[] = ['critical', 'warning', 'info']
-
-export function TrendChart({ runs, openRun }: { runs: Run[]; openRun: (run?: string) => void }) {
-  const [only, setOnly] = useState<'all' | 'unified'>('all')
-  const [hover, setHover] = useState<number | null>(null)
-  const shown = [...runs].reverse().filter(r => only === 'all' || r.report.unified)
-  if (!runs.length) return null
-  const W = 640, H = 170, top = 16, bottom = 22, plot = H - top - bottom
-  const totals = shown.map(r => { const c = countsOf(r); return c.critical + c.warning + c.info })
-  const max = Math.max(1, ...totals)
-  const slot = W / Math.max(shown.length, 1), bar = Math.min(26, Math.max(6, slot * 0.6))
-  const rows = shown.map(r => r.report.rows.current)
-  const rowMax = Math.max(1, ...rows)
-  const line = shown.map((_, i) => `${i ? 'L' : 'M'}${i * slot + slot / 2},${top + plot - (rows[i] / rowMax) * plot}`).join(' ')
-  const h = hover !== null ? shown[hover] : null
-  return <section className="card trend">
-    <div className="card-head">
-      <div><h3>Issues over time</h3><small className="muted">Bars: issues found by the rules in each check. Line: rows checked.</small></div>
-      <div className="segmented">
-        <button className={only === 'all' ? 'on resolved' : ''} onClick={() => setOnly('all')}>All checks</button>
-        <button className={only === 'unified' ? 'on resolved' : ''} onClick={() => setOnly('unified')}>Unified only</button>
-      </div>
-    </div>
-    {!shown.length ? <p className="muted">No unified checks yet.</p> : <div className="chart-plot" onMouseLeave={() => setHover(null)}>
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Issues in the last ${shown.length} checks; the latest had ${totals[totals.length - 1]}.`}>
-        <line className="grid" x1={0} x2={W} y1={top} y2={top} />
-        <text className="tick" x={0} y={top - 4}>{max} issues</text>
-        <line className="axis" x1={0} x2={W} y1={top + plot} y2={top + plot} />
-        {shown.map((r, i) => {
-          const c = countsOf(r)
-          let y = top + plot
-          const x = i * slot + (slot - bar) / 2
-          return <g key={r.id} className={hover !== null && hover !== i ? 'dim' : ''} onMouseEnter={() => setHover(i)} onClick={() => openRun(r.id)}>
-            <rect className="hit" x={i * slot} y={0} width={slot} height={H} />
-            {SEV.map(s => {
-              const height = (c[s] / max) * plot
-              y -= height
-              return height > 0 ? <rect key={s} className={`seg ${s}`} x={x} y={y} width={bar} height={height} rx={2} /> : null
-            })}
-            {totals[i] === 0 && <rect className="seg clean" x={x} y={top + plot - 3} width={bar} height={3} rx={1.5} />}
-            <circle className={`status ${runTone(r)}`} cx={i * slot + slot / 2} cy={H - 8} r={3.5} />
-          </g>
-        })}
-        <path className="rows-line" d={line} />
-      </svg>
-      {h && <div className="chart-tip" style={{ left: `${((hover! + 0.5) / shown.length) * 100}%` }}>
-        <b>{h.report.data_file || 'Check'}</b>
-        <span>{fmtDate(h.created_at)} · {h.report.rows.current.toLocaleString()} rows</span>
-        <span>{SEV.map(s => `${countsOf(h)[s]} ${s}`).join(' · ')}</span>
-      </div>}
-      <div className="chart-legend">
-        <span><i className="sw crit" />Critical</span><span><i className="sw warn" />Warning</span><span><i className="sw inf" />Info</span>
-        <span><i className="sw line" />Rows</span>
       </div>
     </div>}
   </section>
