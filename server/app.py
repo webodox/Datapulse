@@ -246,8 +246,8 @@ def list_projects() -> list[dict]:
         rows = db.execute(
             "SELECT p.id, p.name, p.created_at, p.baseline_json IS NOT NULL AS has_baseline, "
             "(SELECT COUNT(*) FROM runs r WHERE r.project_id = p.id) AS run_count, "
-            "(SELECT status FROM runs r WHERE r.project_id = p.id ORDER BY created_at DESC LIMIT 1) AS latest_status "
-            "FROM projects p ORDER BY p.created_at DESC"
+            "(SELECT status FROM runs r WHERE r.project_id = p.id ORDER BY created_at DESC, rowid DESC LIMIT 1) AS latest_status "
+            "FROM projects p ORDER BY p.created_at DESC, p.rowid DESC"
         ).fetchall()
     return [{"id": r["id"], "name": r["name"], "created_at": r["created_at"], "has_baseline": bool(r["has_baseline"]),
              "run_count": r["run_count"], "latest_status": r["latest_status"]} for r in rows]
@@ -278,9 +278,9 @@ def get_project(project_id: str) -> dict:
     project = _project(project_id)
     with connect() as db:
         datasets = db.execute("SELECT id, name, role, row_count, columns_json, created_at FROM datasets "
-                              "WHERE project_id = ? ORDER BY created_at DESC", (project_id,)).fetchall()
+                              "WHERE project_id = ? ORDER BY created_at DESC, rowid DESC", (project_id,)).fetchall()
         runs = db.execute("SELECT id, status, issue_count, created_at, report_json FROM runs "
-                          "WHERE project_id = ? ORDER BY created_at DESC LIMIT 30", (project_id,)).fetchall()
+                          "WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 30", (project_id,)).fetchall()
     baseline = _loads(project["baseline_json"])
     cfg = _config(project["config_yaml"])
     return {

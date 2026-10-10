@@ -57,10 +57,7 @@ uvicorn server.app:app --reload --port 8000
 cd web && npm install && npm run dev    # http://localhost:5173 (proxies /api to port 8000)
 ```
 
-In the dashboard: create a project (or **Load sample workspace**), upload a known-good file as the baseline,
-then upload new batches to check them. **Edit rules** opens the project's `datapulse.yml`; **Suggest rules from
-baseline** shows `datapulse suggest` output to copy from (nothing is applied). Uploads accept CSV, JSON
-(an array of row objects), JSONL/NDJSON and Parquet, up to 25 MB.
+In the dashboard: create a project (or **Try it with sample data**), drop a known-good file to save the baseline, then drop each new version to check it; the check starts as soon as the file lands. Each project has four tabs: **Checks** (results and history), **Baseline** (column profile, replace it), **Rules** (the project's `datapulse.yml`, plus `datapulse suggest` output to copy from; nothing is applied) and **Send data** (the ingest API). Uploads accept CSV, JSON (an array of row objects), JSONL/NDJSON and Parquet, up to 25 MB.
 
 **Sending data from any language.** Creating a project returns an API key once (only its hash is stored).
 Any service that can make an HTTP request can send rows:

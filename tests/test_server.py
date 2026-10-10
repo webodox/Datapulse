@@ -140,3 +140,12 @@ def test_delete_project_removes_its_data_but_not_shared_files(client, project, t
     assert (ROOT / "examples" / "data" / "orders.csv").exists()
     assert client.delete(f"/api/projects/{pid}").status_code == 404
     assert client.get("/api/projects").json() == []
+
+
+def test_runs_in_the_same_second_are_listed_newest_first(client, project):
+    pid = project["id"]
+    df = make_df()
+    client.post(f"/api/projects/{pid}/baseline", files={"file": ("o.csv", _csv(df), "text/csv")})
+    ids = [client.post(f"/api/projects/{pid}/runs", files={"file": ("o.csv", _csv(df), "text/csv")}).json()["run_id"]
+           for _ in range(3)]
+    assert [r["id"] for r in client.get(f"/api/projects/{pid}").json()["runs"]] == ids[::-1]
