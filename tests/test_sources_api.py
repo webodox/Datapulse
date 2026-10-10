@@ -27,6 +27,47 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
+def test_orders_pdf_passes_the_sample_rules(client):
+    """A PDF of the orders table is the same data, so the sample project's rules accept it."""
+    from datapulse.io import load_dataframe
+    from datapulse.sources.pdfdoc import table_pdf
+
+    orders = load_dataframe(EX / "data" / "orders.csv")
+    project = client.post("/api/demo/seed").json()
+    pid = project["id"]
+    uploaded = client.post(
+        f"/api/projects/{pid}/sources/files",
+        files={"file": ("orders.pdf", table_pdf(orders), "application/pdf")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    source = client.post(
+        f"/api/projects/{pid}/sources",
+        json={"name": "Orders PDF", "kind": "file", "settings": {"file": uploaded.json()["file"]}},
+    ).json()
+    checked = client.post(f"/api/projects/{pid}/sources/{source['id']}/pull", json={"role": "candidate"})
+    assert checked.status_code == 200, checked.text
+    body = checked.json()
+    assert body["status"] == "passed", [(i["severity"], i["title"]) for i in body["issues"]]
+    assert body["rows"]["current"] == len(orders)
+
+
+def test_file_source_accepts_a_pdf(client):
+    from test_documents import make_pdf
+
+    pid = client.post("/api/projects", json={"name": "Docs"}).json()["id"]
+    uploaded = client.post(
+        f"/api/projects/{pid}/sources/files",
+        files={"file": ("invoice.pdf", make_pdf("Invoice 42 total 99.50"), "application/pdf")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    tested = client.post(
+        f"/api/projects/{pid}/sources/test",
+        json={"kind": "file", "settings": {"file": uploaded.json()["file"]}},
+    ).json()
+    assert tested["ok"], tested
+    assert "1 row" in tested["message"]
+
+
 def test_add_source_form_fills_with_test_data_and_connects(client):
     pid = client.post("/api/projects", json={"name": "Try"}).json()["id"]
     catalog = {k["kind"]: k for k in client.get("/api/sources/catalog").json()}

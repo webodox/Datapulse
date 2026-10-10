@@ -98,6 +98,8 @@ def test_mongodb_documents_are_flattened(monkeypatch):
 def test_link_source_handles_sheets_and_refuses_internal_addresses():
     sheet = "https://docs.google.com/spreadsheets/d/AbC-123/edit#gid=42"
     assert download_url(sheet) == "https://docs.google.com/spreadsheets/d/AbC-123/export?format=csv&gid=42"
+    doc = "https://docs.google.com/document/d/DOCID99/edit"
+    assert download_url(doc) == "https://docs.google.com/document/d/DOCID99/export?format=docx"
     assert len(read_bytes(b"a,b\n1,2\n", "https://x/data", "text/csv")) == 1
     assert read_bytes(b'[{"a": 1}]', "https://x/d.json", "")["a"].tolist() == [1]
     for url in ["https://127.0.0.1/x.csv", "https://169.254.169.254/latest", "http://example.com/x.csv"]:

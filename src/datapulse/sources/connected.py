@@ -28,6 +28,12 @@ def read_any(path: Path, label: str) -> pd.DataFrame:
     if is_tabular(path):
         return load_dataframe(path)
     if is_document(path):
+        if ext == ".pdf":
+            from .tabular_text import pdf_frame
+
+            table = pdf_frame(path, label)
+            if table is not None:
+                return table
         result = unify_files([(path, label)], None, Config(), source_label=label)
         if not result.rows:
             raise SourceError(f"No records could be extracted from {label}.")
