@@ -1,207 +1,424 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { api, API, fmtDate, timeAgo, type Project, type ProjectDetail, type Severity } from './api'
+import { Icon } from './icons'
+import { BrandMark, CodeBlock, Dropzone, Modal, RunTrend, SchemaTable, ToneIcon, Toasts, TONE_LABEL, runTone, useTheme, type Toast } from './components'
 
-const API = import.meta.env.VITE_API_URL || ''
+const SEVERITIES: Severity[] = ['critical', 'warning', 'info']
+const SEVERITY_LABEL: Record<Severity, string> = { critical: 'Critical', warning: 'Warning', info: 'Info' }
+const SEVERITY_ICON = { critical: 'alert', warning: 'flag', info: 'activity' } as const
+const DOCS_URL = `${API || 'http://localhost:8000'}/docs`
 
-type Severity = 'critical' | 'warning' | 'info'
-type IssueConsumer = { name: string; type: string; owner: string; columns: string[]; dataset_wide: boolean }
-type Issue = {
-  check: string; severity: Severity; title: string; columns: string[]; measured_summary: string;
-  suggested_explanation: string; ai_explanation?: string | null; examples: string[]; consumers: IssueConsumer[]
-}
-type Report = {
-  status: 'passed' | 'failed'; fail_on: string; issues: Issue[]; rows: { baseline: number; current: number };
-  counts: Record<Severity, number>; passed_checks: string[]; affected_consumers: string[]; schema_changed: boolean;
-  ai_note?: string | null; markdown?: string
-}
-type Run = { id: string; status: string; issue_count: number; created_at: string; report: Report }
-type Project = { id: string; name: string; has_baseline: boolean; run_count: number; latest_status?: string | null }
-type Consumer = { name: string; type: string; owner: string; columns: string[] }
-type ProjectDetail = {
-  id: string; name: string; has_baseline: boolean; config_yaml: string; fail_on: string; consumers: Consumer[];
-  baseline?: { baseline_version: number; rows: number; source?: string; columns: Record<string, { kind: string; dtype: string; null_rate: number; unique_count: number }> } | null;
-  datasets: Array<{ id: string; name: string; role: string; row_count: number; columns: string[]; created_at: string }>;
-  runs: Run[];
-}
-
-const SEVERITY_LABEL: Record<Severity, string> = { critical: '● Critical', warning: '● Warning', info: '● Info' }
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${path}`, init)
-  if (!response.ok) {
-    let message = `Request failed (${response.status})`
-    try { const body = await response.json(); message = body.detail || message } catch { /* keep status message */ }
-    throw new Error(message)
-  }
-  return response.json()
-}
-
-function fmtDate(value?: string) { return value ? new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—' }
+type Health = 'checking' | 'online' | 'offline'
 
 export default function App() {
+  const { theme, toggle: toggleTheme } = useTheme()
   const [projects, setProjects] = useState<Project[]>([])
   const [activeId, setActiveId] = useState('')
   const [detail, setDetail] = useState<ProjectDetail | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const [health, setHealth] = useState<Health>('checking')
+  const [toasts, setToasts] = useState<Toast[]>([])
   const [projectName, setProjectName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [seeding, setSeeding] = useState(false)
   const [apiKey, setApiKey] = useState('')
-  const [configOpen, setConfigOpen] = useState(false)
+  const [modal, setModal] = useState<'' | 'connect' | 'rules' | 'new'>('')
   const [configText, setConfigText] = useState('')
+  const [savingConfig, setSavingConfig] = useState(false)
   const [baselineFile, setBaselineFile] = useState<File | null>(null)
   const [candidateFile, setCandidateFile] = useState<File | null>(null)
-  const [scanning, setScanning] = useState(false)
+  const [busy, setBusy] = useState<'' | 'baseline' | 'runs'>('')
   const [aiEnabled, setAiEnabled] = useState(false)
-  const [showConnect, setShowConnect] = useState(false)
   const [suggestions, setSuggestions] = useState('')
+  const [selectedRunId, setSelectedRunId] = useState('')
+  const [severityFilter, setSeverityFilter] = useState<Severity | 'all'>('all')
+
+  const notify = useCallback((kind: Toast['kind'], text: string) => setToasts(list => [...list.slice(-2), { id: Date.now() + Math.random(), kind, text }]), [])
+  const dismiss = useCallback((id: number) => setToasts(list => list.filter(t => t.id !== id)), [])
+  const fail = useCallback((e: unknown) => notify('error', (e as Error).message), [notify])
+  const closeModal = useCallback(() => setModal(''), [])
+
+  const loadDetail = useCallback(async (id: string) => {
+    const item = await api<ProjectDetail>(`/api/projects/${id}`)
+    setDetail(item)
+    setConfigText(item.config_yaml)
+  }, [])
 
   const refresh = useCallback(async (select?: string) => {
     const list = await api<Project[]>('/api/projects')
     setProjects(list)
-    const nextId = select || activeId || list[0]?.id || ''
+    const nextId = select || list[0]?.id || ''
     setActiveId(nextId)
-    if (nextId) {
-      const item = await api<ProjectDetail>(`/api/projects/${nextId}`)
-      setDetail(item)
-      setConfigText(item.config_yaml)
-    } else setDetail(null)
-  }, [activeId])
+    if (nextId) await loadDetail(nextId); else setDetail(null)
+  }, [loadDetail])
 
   useEffect(() => {
-    refresh().catch(e => setError(e.message)).finally(() => setLoading(false))
+    api('/api/health').then(() => setHealth('online')).catch(() => setHealth('offline'))
+    // deep link: #/p/<project>/r/<run>
+    const [, project, , run] = window.location.hash.match(/^#\/p\/([\w-]+)(\/r\/([\w-]+))?/) || []
+    if (run) setSelectedRunId(run)
+    refresh(project).catch(() => refresh()).catch(fail).finally(() => setLoading(false))
   }, [])
 
   useEffect(() => {
     if (!activeId) return
-    setSuggestions('')
-    api<ProjectDetail>(`/api/projects/${activeId}`).then(item => { setDetail(item); setConfigText(item.config_yaml) }).catch(e => setError(e.message))
-  }, [activeId])
+    const hash = `#/p/${activeId}${selectedRunId ? `/r/${selectedRunId}` : ''}`
+    if (window.location.hash !== hash) window.history.replaceState(null, '', hash)
+  }, [activeId, selectedRunId])
 
-  const latest = detail?.runs?.[0]
-  const findings = latest?.report?.issues || []
-  const errors = findings.filter(item => item.severity === 'critical').length
-  const warnings = findings.filter(item => item.severity === 'warning').length
+  function selectProject(id: string) {
+    if (id === activeId) return
+    setActiveId(id); setSuggestions(''); setSelectedRunId(''); setSeverityFilter('all')
+    setBaselineFile(null); setCandidateFile(null)
+    loadDetail(id).catch(fail)
+  }
+
+  const runs = detail?.runs || []
+  const latest = runs[0]
+  const viewed = runs.find(run => run.id === selectedRunId) || latest
+  const viewingLatest = viewed?.id === latest?.id
+  const findings = viewed?.report?.issues || []
+  const severityCounts = useMemo(() => Object.fromEntries(SEVERITIES.map(s => [s, findings.filter(f => f.severity === s).length])) as Record<Severity, number>, [findings])
+  const shownFindings = severityFilter === 'all' ? findings : findings.filter(f => f.severity === severityFilter)
   const allColumns = useMemo(() => Object.entries(detail?.baseline?.columns || {}), [detail])
+  const passRate = runs.length ? Math.round(runs.filter(r => r.status === 'passed').length / runs.length * 100) : null
 
   async function createProject(event: FormEvent) {
     event.preventDefault()
     if (projectName.trim().length < 2) return
-    setCreating(true); setError('')
+    setCreating(true)
     try {
       const created = await api<{ id: string; api_key: string }>('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: projectName.trim() }) })
-      setApiKey(created.api_key)
-      setProjectName('')
+      setApiKey(created.api_key); setProjectName(''); setModal(''); setSelectedRunId('')
       await refresh(created.id)
-      setNotice('Project created. Save the API key now; it is shown only once.')
-    } catch (e) { setError((e as Error).message) } finally { setCreating(false) }
+      notify('success', 'Project created. Save the API key now — it is shown only once.')
+    } catch (e) { fail(e) } finally { setCreating(false) }
   }
 
   async function seedDemo() {
-    setError(''); setLoading(true)
+    setSeeding(true)
     try {
       const created = await api<{ id: string; api_key: string }>('/api/demo/seed', { method: 'POST' })
-      setApiKey(created.api_key)
+      setApiKey(created.api_key); setModal(''); setSelectedRunId('')
       await refresh(created.id)
-      setNotice('Sample workspace ready. Upload a changed file to run a real check.')
-    } catch (e) { setError((e as Error).message) } finally { setLoading(false) }
+      notify('success', 'Sample workspace ready. Upload a changed file to run a real check.')
+    } catch (e) { fail(e) } finally { setSeeding(false) }
   }
 
   async function upload(role: 'baseline' | 'runs') {
     const file = role === 'baseline' ? baselineFile : candidateFile
     if (!file || !activeId) return
-    setError(''); setNotice(''); setScanning(true)
+    setBusy(role)
     const form = new FormData(); form.append('file', file); form.append('name', file.name)
     if (role === 'runs') form.append('use_ai', String(aiEnabled))
     try {
-      await api(`/api/projects/${activeId}/${role === 'baseline' ? 'baseline' : 'runs'}`, { method: 'POST', body: form })
+      await api(`/api/projects/${activeId}/${role}`, { method: 'POST', body: form })
       if (role === 'baseline') setBaselineFile(null); else setCandidateFile(null)
+      setSelectedRunId(''); setSeverityFilter('all')
       await refresh(activeId)
-      setNotice(role === 'baseline' ? 'Baseline saved. DataPulse is ready to monitor this dataset.' : 'Quality check finished. The latest findings are shown below.')
-    } catch (e) { setError((e as Error).message) } finally { setScanning(false) }
+      notify('success', role === 'baseline' ? 'Baseline saved. DataPulse is ready to monitor this dataset.' : 'Quality check finished — results are below.')
+      if (role === 'runs') document.getElementById('findings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } catch (e) { fail(e) } finally { setBusy('') }
   }
 
   async function saveConfig() {
     if (!activeId) return
-    setError(''); setNotice('')
+    setSavingConfig(true)
     try {
       await api(`/api/projects/${activeId}/config`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ config_yaml: configText }) })
-      setConfigOpen(false); await refresh(activeId); setNotice('Quality rules saved.')
-    } catch (e) { setError((e as Error).message) }
+      setModal(''); await refresh(activeId); notify('success', 'Quality rules saved.')
+    } catch (e) { fail(e) } finally { setSavingConfig(false) }
   }
 
   async function loadSuggestions() {
     if (!activeId) return
-    setError('')
-    try { setSuggestions((await api<{ yaml: string }>(`/api/projects/${activeId}/suggestions`)).yaml) } catch (e) { setError((e as Error).message) }
+    try { setSuggestions((await api<{ yaml: string }>(`/api/projects/${activeId}/suggestions`)).yaml) } catch (e) { fail(e) }
   }
 
-  async function copy(text: string) {
-    try { await navigator.clipboard.writeText(text); setNotice('Copied to clipboard.') } catch { setNotice('Copy is unavailable in this browser. Select and copy the text.') }
+  async function copy(text: string, what = 'Copied to clipboard.') {
+    try { await navigator.clipboard.writeText(text); notify('success', what) } catch { notify('error', 'Copy is unavailable in this browser. Select and copy the text.') }
   }
 
-  const curlSnippet = apiKey && detail ? `curl -X POST http://localhost:8000/api/projects/${detail.id}/ingest -H 'Content-Type: application/json' -H 'X-DataPulse-Key: ${apiKey}' -d '{"dataset_name":"orders","role":"candidate","rows":[{"customer_id":"C009","amount":22.5,"status":"paid"}]}'` : ''
+  const origin = API || (typeof window !== 'undefined' && window.location.port === '5173' ? 'http://localhost:8000' : window.location.origin)
+  const curlSnippet = detail ? `curl -X POST ${origin}/api/projects/${detail.id}/ingest \\
+  -H 'Content-Type: application/json' \\
+  -H 'X-DataPulse-Key: ${apiKey || 'YOUR_PROJECT_API_KEY'}' \\
+  -d '{"dataset_name":"orders","role":"candidate",
+       "rows":[{"customer_id":"C009","amount":22.5,"status":"paid"}]}'` : ''
+
+  const status = !detail ? null : !detail.has_baseline ? { tone: 'idle', label: 'Setup needed' } : latest?.report.status === 'failed' ? { tone: 'failed', label: 'Action needed' } : latest ? { tone: 'healthy', label: 'Healthy' } : { tone: 'ready', label: 'Ready' }
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-mark"><span></span><span></span><span></span><span></span></div><div><b>datapulse</b><small>DATA QUALITY, IN CONTEXT</small></div></div>
-      <div className="side-label">WORKSPACES <button className="tiny-add" onClick={() => document.getElementById('project-name')?.focus()}>＋</button></div>
-      <div className="project-list">
-        {projects.map(project => <button key={project.id} onClick={() => { setActiveId(project.id); setError('') }} className={`project-link ${activeId === project.id ? 'active' : ''}`}>
-          <span className="project-dot">{project.name.slice(0, 1).toUpperCase()}</span><span className="project-text"><b>{project.name}</b><small>{project.run_count} checks · {project.has_baseline ? 'monitoring' : 'setup needed'}</small></span>
-          <i className={`status-dot ${project.latest_status === 'failed' ? 'red' : project.latest_status === 'passed' ? 'green' : ''}`}></i>
+      <div className="brand"><BrandMark /><div><b>datapulse</b><small>Data quality, in context</small></div></div>
+      <div className="side-label"><span>Projects</span><button className="ghost-icon" aria-label="New project" title="New project" onClick={() => setModal('new')}><Icon name="plus" size={15} /></button></div>
+      <nav className="project-list" aria-label="Projects">
+        {loading && !projects.length && [0, 1, 2].map(i => <div key={i} className="skeleton project-skeleton" />)}
+        {projects.map(project => <button key={project.id} onClick={() => selectProject(project.id)} className={`project-link ${activeId === project.id ? 'active' : ''}`} aria-current={activeId === project.id ? 'page' : undefined}>
+          <span className="project-dot">{project.name.slice(0, 1).toUpperCase()}</span>
+          <span className="project-text"><b>{project.name}</b><small>{project.run_count} check{project.run_count === 1 ? '' : 's'} · {project.has_baseline ? 'monitoring' : 'setup needed'}</small></span>
+          <i className={`status-dot ${project.latest_status === 'failed' ? 'red' : project.latest_status === 'passed' ? 'green' : ''}`} title={project.latest_status || 'no runs yet'}></i>
         </button>)}
         {!projects.length && !loading && <div className="empty-side">Your projects will appear here.</div>}
+      </nav>
+      <div className="sidebar-bottom">
+        <div className="stack-card"><Icon name="layers" size={18} /><div><b>Any stack. One signal.</b><small>Send rows from any language through the REST API.</small></div></div>
+        <a className="docs-link" href={DOCS_URL} target="_blank" rel="noreferrer"><Icon name="code" size={14} /> API documentation <Icon name="external" size={13} className="push" /></a>
       </div>
-      <div className="sidebar-bottom"><div className="stack-card"><div className="stack-icon">◎</div><div><b>Any stack. One signal.</b><small>Send data from any language with the REST API.</small></div></div><a className="docs-link" href="http://localhost:8000/docs" target="_blank" rel="noreferrer"><span>⌘</span> API documentation <span className="external">↗</span></a><div className="profile"><div className="avatar">DP</div><span><b>DataPulse</b><small>Local workspace</small></span><span className="profile-menu">•••</span></div></div>
     </aside>
 
     <main className="main">
-      <header className="topbar"><div className="crumb"><span>Workspace</span><b>/</b><strong>{detail?.name || 'Overview'}</strong></div><div className="top-actions"><span className="connected"><i></i> API connected</span><button className="icon-button" title="API connection" onClick={() => setShowConnect(true)}>⌘</button><div className="avatar small-avatar">KB</div></div></header>
+      <header className="topbar">
+        <div className="crumb"><span>Workspace</span><b>/</b><strong>{detail?.name || 'Overview'}</strong></div>
+        <div className="top-actions">
+          <span className={`connected ${health}`} title={health === 'offline' ? 'Start the API: uvicorn server.app:app --port 8000' : undefined}><i></i>{health === 'online' ? 'API connected' : health === 'offline' ? 'API offline' : 'Connecting…'}</span>
+          <button className="icon-button" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} title="Toggle theme" onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} /></button>
+          <button className="icon-button" aria-label="Connect a service" title="Connect a service" onClick={() => setModal('connect')}><Icon name="plug" /></button>
+        </div>
+      </header>
+
       <div className="content">
-        <div className="eyebrow"><span className="pulse-icon">◉</span> DATA OBSERVABILITY <span className="eyebrow-line"></span><span className="stack-agnostic">LANGUAGE AGNOSTIC</span></div>
-        <section className="hero-row"><div><h1>Trust your data<br /><em>in every deploy.</em></h1><p>Catch schema drift and quality issues before they break the dashboards, models, and services that depend on your data.</p></div><div className="hero-art"><div className="orbit orbit-one"></div><div className="orbit orbit-two"></div><div className="orbit orbit-three"></div><div className="orbit-center"><div className="brand-mark large"><span></span><span></span><span></span><span></span></div></div><div className="orbit-node n1">CSV</div><div className="orbit-node n2">JSON</div><div className="orbit-node n3">API</div><div className="orbit-node n4">PARQUET</div></div></section>
+        {apiKey && <div className="key-banner fade-in"><Icon name="shield" size={20} /><div><b>Save your project API key</b><span>Only its hash is stored — it won't be shown again after you leave this screen.</span><code>{apiKey}</code></div><button className="button secondary" onClick={() => copy(apiKey, 'API key copied.')}><Icon name="copy" size={14} /> Copy key</button><button className="ghost-icon" aria-label="Dismiss" onClick={() => setApiKey('')}><Icon name="x" /></button></div>}
 
-        {error && <div className="alert error-alert"><b>Something needs attention</b><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
-        {notice && <div className="alert success-alert"><b>✓</b><span>{notice}</span><button onClick={() => setNotice('')}>×</button></div>}
-        {apiKey && <div className="key-banner"><div><b>Save your project API key</b><span>It is stored as a hash and will not be shown again after you leave this screen.</span><code>{apiKey}</code></div><button className="button secondary" onClick={() => copy(apiKey)}>Copy key</button><button className="close-key" onClick={() => setApiKey('')}>×</button></div>}
+        {loading ? <LoadingView /> : !detail ? <Welcome
+          projectName={projectName} setProjectName={setProjectName} creating={creating} createProject={createProject}
+          seeding={seeding} seedDemo={seedDemo} openConnect={() => setModal('connect')} /> : <div className="project-view fade-in" key={detail.id}>
 
-        {!detail ? <section className="welcome-grid">
-          <div className="panel create-panel"><div className="panel-kicker">START MONITORING</div><h2>Create a data project</h2><p>Connect a dataset and DataPulse will build a baseline you can check on every release.</p><form onSubmit={createProject} className="create-form"><label htmlFor="project-name">Project name</label><div className="input-button"><input id="project-name" value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="e.g. Orders pipeline" minLength={2} maxLength={80} required /><button disabled={creating}>{creating ? 'Creating…' : 'Create project'} <span>→</span></button></div></form><div className="format-row"><span>SUPPORTED DATA</span><b>CSV</b><b>JSON</b><b>JSONL</b><b>PARQUET</b></div></div>
-          <div className="panel sample-panel"><div className="sample-top"><div className="sample-icon">✦</div><span className="sample-tag">INTERACTIVE STARTER</span></div><h2>Explore a working dataset</h2><p>Load a real sample orders dataset, baseline, downstream map, and quality rules. Then upload a changed file to see the monitor work.</p><button className="button dark" onClick={seedDemo} disabled={loading}>{loading ? 'Loading…' : 'Load sample workspace'} <span>→</span></button><div className="sample-note"><i></i> Uses the same checks as the REST API and GitHub Action.</div></div>
-          <div className="wide-note"><span>↗</span><div><b>Connect any language through HTTP</b><small>Java · JavaScript · Go · Ruby · Python · anything that can send JSON</small></div><button onClick={() => setShowConnect(true)}>View API pattern <span>→</span></button></div>
-        </section> : <>
+          <section className="project-header">
+            <div>
+              <div className="eyebrow"><span className={`pulse ${status?.tone}`}></span>{status?.label}</div>
+              <h1>{detail.name}</h1>
+              <p className="meta-line">
+                {detail.has_baseline ? <>Baseline <b>v{detail.baseline?.baseline_version}</b> · {detail.baseline?.rows.toLocaleString()} rows · {allColumns.length} columns{detail.baseline?.source ? <> · <code>{detail.baseline.source}</code></> : null}</> : 'No baseline yet — upload a known-good file to start monitoring.'}
+              </p>
+            </div>
+            <div className="header-actions">
+              <button className="button outline" onClick={() => setModal('rules')}><Icon name="edit" size={14} /> Edit rules</button>
+              <button className="button" onClick={() => setModal('connect')}><Icon name="plug" size={14} /> Connect API</button>
+            </div>
+          </section>
+
           <section className="summary-grid">
-            <div className="stat-card"><div className="stat-label">MONITORING STATUS <span className="stat-icon">◉</span></div><div className="stat-value">{!detail.has_baseline ? 'Setup needed' : latest?.report?.status === 'failed' ? 'Action needed' : latest ? 'Healthy' : 'Ready'}</div><div className="stat-foot"><i className={`status-dot ${latest?.report?.status === 'failed' ? 'red' : detail.has_baseline ? 'green' : ''}`}></i>{latest ? `Last checked ${fmtDate(latest.created_at)}` : detail.has_baseline ? 'Baseline created · waiting for next run' : 'Add a baseline to start monitoring'}</div></div>
-            <div className="stat-card"><div className="stat-label">DATASETS TRACKED <span className="stat-icon">▤</span></div><div className="stat-value">{detail.datasets.length}<small> datasets</small></div><div className="stat-foot">{detail.has_baseline ? `Baseline v${detail.baseline?.baseline_version} · ${allColumns.length} columns` : 'No baseline yet'}</div></div>
-            <div className="stat-card"><div className="stat-label">OPEN FINDINGS <span className="stat-icon">⚑</span></div><div className="stat-value">{errors + warnings}<small> findings</small></div><div className="stat-foot"><span className="severity-text"><b>{errors}</b> critical</span><span className="severity-text warn"><b>{warnings}</b> warnings</span></div></div>
-            <div className="stat-card"><div className="stat-label">TOTAL CHECKS <span className="stat-icon">◷</span></div><div className="stat-value">{detail.runs.length}<small> runs</small></div><div className="stat-foot">Fails on <code>{detail.fail_on}</code> and above</div></div>
+            <Stat label="Status" icon="activity" value={status?.label || '—'} tone={status?.tone}
+              foot={latest ? `Last checked ${timeAgo(latest.created_at)}` : detail.has_baseline ? 'Waiting for the first check' : 'Add a baseline to begin'} />
+            <Stat label="Open findings" icon="flag" value={String(latest?.issue_count ?? 0)}
+              foot={<><span className="sev-count critical"><b>{latest?.report.issues.filter(i => i.severity === 'critical').length ?? 0}</b> critical</span><span className="sev-count warning"><b>{latest?.report.issues.filter(i => i.severity === 'warning').length ?? 0}</b> warning</span></>} />
+            <Stat label="Pass rate" icon="check" value={passRate === null ? '—' : `${passRate}%`} foot={runs.length ? `Across the last ${runs.length} run${runs.length === 1 ? '' : 's'}` : 'No runs yet'} />
+            <Stat label="Fail threshold" icon="shield" value={detail.fail_on} foot={`${detail.datasets.length} dataset${detail.datasets.length === 1 ? '' : 's'} uploaded`} />
           </section>
 
           <section className="work-grid">
-            <div className="panel run-panel"><div className="section-head"><div><div className="panel-kicker">DATASET MONITOR</div><h2>Run a quality check</h2><p>Set a trusted baseline, then compare each new batch.</p></div><button className="text-button" onClick={() => setShowConnect(true)}>⌘ Connect API</button></div>
-              <div className="upload-grid">
-                <div className={`upload-box ${detail.has_baseline ? 'has-baseline' : ''}`}><div className="upload-title"><span className="step-number">01</span><div><b>Known-good baseline</b><small>{detail.has_baseline ? `v${detail.baseline?.baseline_version} · ${detail.baseline?.rows?.toLocaleString()} rows saved` : 'Create a profile to compare against'}</small></div><span className={`mini-state ${detail.has_baseline ? 'done' : ''}`}>{detail.has_baseline ? 'SAVED' : 'REQUIRED'}</span></div><label className="file-picker"><span className="upload-symbol">↑</span><span>{baselineFile?.name || 'Choose a file'}<small>CSV · JSON · JSONL · Parquet · 25 MB max</small></span><input type="file" accept=".csv,.json,.jsonl,.ndjson,.parquet,.pq" onChange={e => setBaselineFile(e.target.files?.[0] || null)} /></label><button className="button outline full" disabled={!baselineFile || scanning} onClick={() => upload('baseline')}>{scanning ? 'Processing…' : 'Save baseline'} <span>→</span></button></div>
-                <div className={`upload-box candidate-box ${!detail.has_baseline ? 'locked' : ''}`}><div className="upload-title"><span className="step-number">02</span><div><b>New data batch</b><small>{detail.has_baseline ? 'Compare with the saved baseline' : 'Available once baseline is ready'}</small></div><span className="mini-state">CHECK</span></div><label className="file-picker"><span className="upload-symbol">↥</span><span>{candidateFile?.name || 'Choose a file'}<small>Upload a new version to inspect</small></span><input type="file" accept=".csv,.json,.jsonl,.ndjson,.parquet,.pq" onChange={e => setCandidateFile(e.target.files?.[0] || null)} disabled={!detail.has_baseline} /></label><button className="button primary full" disabled={!candidateFile || !detail.has_baseline || scanning} onClick={() => upload('runs')}>{scanning ? <><span className="spinner"></span> Analyzing data…</> : <>Run quality check <span>→</span></>}</button></div>
+            <div className="panel">
+              <div className="panel-head"><div><div className="kicker">Dataset monitor</div><h2>Run a quality check</h2><p>Set a trusted baseline, then compare each new batch against it.</p></div></div>
+              <div className="steps">
+                <div className={`step ${detail.has_baseline ? 'done' : 'current'}`}>
+                  <div className="step-head"><span className="step-num">{detail.has_baseline ? <Icon name="check" size={13} /> : '1'}</span><div><b>Known-good baseline</b><small>{detail.has_baseline ? `v${detail.baseline?.baseline_version} saved · upload again to re-baseline` : 'The profile every batch is compared against'}</small></div></div>
+                  <Dropzone file={baselineFile} onFile={setBaselineFile} hint="CSV · JSON · JSONL · Parquet · 25 MB" />
+                  <button className="button outline full" disabled={!baselineFile || !!busy} onClick={() => upload('baseline')}>{busy === 'baseline' ? <><span className="spinner" /> Profiling…</> : <>{detail.has_baseline ? 'Replace baseline' : 'Save baseline'} <Icon name="arrow" size={14} /></>}</button>
+                </div>
+                <div className={`step ${detail.has_baseline ? 'current' : 'locked'}`}>
+                  <div className="step-head"><span className="step-num">2</span><div><b>New data batch</b><small>{detail.has_baseline ? 'Compared against the saved baseline' : 'Unlocks once a baseline is saved'}</small></div></div>
+                  <Dropzone file={candidateFile} onFile={setCandidateFile} disabled={!detail.has_baseline} hint="Upload the new version to inspect" />
+                  <button className="button primary full" disabled={!candidateFile || !detail.has_baseline || !!busy} onClick={() => upload('runs')}>{busy === 'runs' ? <><span className="spinner" /> Analyzing data…</> : <>Run quality check <Icon name="arrow" size={14} /></>}</button>
+                </div>
               </div>
-              <div className="upload-foot"><span>▣</span> Your uploaded dataset stays in this workspace. DataPulse stores profiles and reports for review.<label className="ai-toggle"><input type="checkbox" checked={aiEnabled} onChange={e => setAiEnabled(e.target.checked)} /> AI explanation</label></div>
+              <div className="panel-foot">
+                <span><Icon name="shield" size={14} /> Files stay in this workspace; DataPulse stores profiles and reports.</span>
+                <label className="switch"><input type="checkbox" checked={aiEnabled} onChange={e => setAiEnabled(e.target.checked)} /><span className="track"></span><Icon name="sparkle" size={13} /> AI explanations</label>
+              </div>
             </div>
-            <div className="panel consumers-panel"><div className="panel-kicker">DOWNSTREAM IMPACT</div><div className="section-title-line"><h2>What depends on your data</h2><button className="edit-button" onClick={() => setConfigOpen(!configOpen)}>{configOpen ? 'Close' : 'Edit rules'}</button></div><p>When a field drifts, see the dashboards and models that may be affected.</p>
-              {configOpen ? <div className="config-editor"><textarea value={configText} onChange={e => setConfigText(e.target.value)} spellCheck={false} aria-label="DataPulse YAML configuration"/><button className="button primary full" onClick={saveConfig}>Save quality rules <span>→</span></button>{detail.has_baseline && <button className="button outline full" onClick={loadSuggestions}>Suggest rules from baseline <span>✦</span></button>}{suggestions && <div className="suggestions"><b>Suggested rules (review before copying; nothing was applied)</b><div className="code-snippet"><button onClick={() => copy(suggestions)}>Copy</button><pre>{suggestions}</pre></div></div>}</div> : <div className="consumer-list">{detail.consumers.length ? detail.consumers.slice(0, 5).map((consumer, i) => <div className="consumer-item" key={consumer.name}><div className={`consumer-symbol c${i % 4}`}>{['◉', '↗', '▤', '◈'][i % 4]}</div><div className="consumer-main"><b>{consumer.name}</b><small>{consumer.type}{consumer.owner ? ` · ${consumer.owner}` : ''} · {consumer.columns.join(', ')}</small></div><span className="consumer-count">{latest?.report.affected_consumers?.includes(consumer.name) ? 'AFFECTED' : 'MAPPED'}</span></div>) : allColumns.slice(0, 4).map(([col, stats], i) => <div className="consumer-item" key={col}><div className={`consumer-symbol c${i}`}>{['◉', '↗', '▤', '◈'][i]}</div><div className="consumer-main"><b>{col}</b><small>{stats.kind} · {(stats.null_rate * 100).toFixed(1)}% null · {stats.unique_count.toLocaleString()} unique</small></div><span className="consumer-count">FIELD</span></div>)}{!detail.consumers.length && <div className="empty-small">{allColumns.length ? 'No consumers mapped yet. Add a consumers: section to the rules.' : 'Create a baseline to view fields.'}</div>}</div>}
-              <button className="rules-link" onClick={() => setConfigOpen(!configOpen)}>{configOpen ? 'Back to impact map' : 'Configure quality rules'} <span>→</span></button>
+
+            <div className="panel">
+              <div className="panel-head"><div><div className="kicker">Activity</div><h2>Run history</h2></div><span className="count-chip">{runs.length} saved</span></div>
+              {runs.length ? <>
+                <RunTrend runs={runs} selectedId={viewed?.id || ''} onSelect={id => { setSelectedRunId(id); setSeverityFilter('all') }} />
+                <div className="history-list">
+                  {runs.slice(0, 5).map(run => <button key={run.id} className={`history-item ${run.id === viewed?.id ? 'active' : ''}`} onClick={() => { setSelectedRunId(run.id); setSeverityFilter('all') }}>
+                    <ToneIcon run={run} />
+                    <span className="history-main"><b>{TONE_LABEL[runTone(run)]}</b><small>{run.report.rows.current.toLocaleString()} rows · {fmtDate(run.created_at)}</small></span>
+                    <span className={`history-findings ${runTone(run)}`}>{run.issue_count ? `${run.issue_count} finding${run.issue_count === 1 ? '' : 's'}` : 'Clean'}</span>
+                  </button>)}
+                </div>
+              </> : <EmptyState icon="activity" title="No runs yet" text="Each quality check you run is saved here with a trend over time." />}
             </div>
           </section>
 
-          <section className="panel findings-panel"><div className="section-head"><div><div className="panel-kicker">LATEST RUN · {latest ? fmtDate(latest.created_at).toUpperCase() : 'AWAITING DATA'}</div><h2>{latest ? (latest.report.status === 'failed' ? 'Findings to review' : 'Checks passed') : 'No quality runs yet'}</h2></div>{latest && <div className="findings-actions">{latest.report.markdown && <button className="edit-button" onClick={() => copy(latest.report.markdown || '')}>Copy Markdown report</button>}<span className={`run-badge ${latest.report.status}`}>{latest.report.status === 'failed' ? '● NEEDS ATTENTION' : findings.length ? '● PASSED WITH ISSUES' : '● ALL CLEAR'}</span></div>}</div>
-            {!latest ? <div className="empty-run"><div className="empty-illustration">⌁</div><b>Run your first check</b><span>Upload a new data batch above. Results and run history will appear here.</span></div> : findings.length === 0 ? <div className="clear-state"><span>✓</span><div><b>Everything looks good.</b><small>{latest.report.passed_checks?.length ? `Passed: ${latest.report.passed_checks.join(', ')}` : 'No configured checks failed on this batch.'}</small></div></div> : <div className="table-wrap"><table><thead><tr><th>SEVERITY</th><th>FIELD</th><th>FINDING</th><th>MEASURED</th><th>AFFECTED CONSUMERS</th></tr></thead><tbody>{findings.map((item, index) => <tr key={`${item.check}-${item.columns.join(',')}-${index}`}><td><span className={`severity-pill ${item.severity}`}>{SEVERITY_LABEL[item.severity]}</span></td><td>{item.columns.length ? item.columns.map(col => <code key={col}>{col}</code>) : <code>dataset</code>}</td><td><b>{item.title}</b><small>{item.check}</small><span className="explanation"><i>Possible explanation (suggested, not verified):</i> {item.suggested_explanation}</span>{item.ai_explanation && <span className="explanation ai"><i>✦ AI-generated (unverified):</i> {item.ai_explanation}</span>}</td><td>{item.measured_summary}{item.examples?.length ? <small>Examples: {item.examples.join('; ')}</small> : null}</td><td>{item.consumers?.length ? item.consumers.map(c => <span className="consumer-chip" key={c.name} title={c.dataset_wide ? 'Reads this dataset; the issue is dataset-wide' : `Uses ${c.columns.join(', ')}`}>{c.name}</span>) : '—'}</td></tr>)}</tbody></table></div>}
-            {latest?.report?.ai_note && <div className="ai-note"><span>✦ AI EXPLANATION</span>{latest.report.ai_note}</div>}
+          <section className="panel findings-panel" id="findings">
+            <div className="panel-head">
+              <div>
+                <div className="kicker">{viewed ? `${viewingLatest ? 'Latest run' : 'Earlier run'} · ${fmtDate(viewed.created_at)}` : 'Awaiting data'}</div>
+                <h2>{!viewed ? 'No quality runs yet' : viewed.report.status === 'failed' ? 'Findings to review' : findings.length ? 'Passed, with notes' : 'All checks passed'}</h2>
+              </div>
+              {viewed && <div className="findings-actions">
+                {!viewingLatest && <button className="button ghost" onClick={() => setSelectedRunId('')}><Icon name="back" size={14} /> Latest run</button>}
+                {viewed.report.markdown && <button className="button ghost" onClick={() => copy(viewed.report.markdown || '', 'Markdown report copied.')}><Icon name="copy" size={14} /> Markdown</button>}
+                <span className={`run-badge ${runTone(viewed)}`}><ToneIcon run={viewed} />{viewed.report.status === 'failed' ? 'Needs attention' : findings.length ? 'Passed with issues' : 'All clear'}</span>
+              </div>}
+            </div>
+
+            {viewed && <div className="run-meta">
+              <span><b>{viewed.report.rows.current.toLocaleString()}</b> rows checked</span>
+              <span><b>{viewed.report.rows.baseline.toLocaleString()}</b> in baseline</span>
+              <span><b>{viewed.report.passed_checks?.length ?? 0}</b> checks passed</span>
+              {viewed.report.schema_changed && <span className="schema-flag"><Icon name="alert" size={13} /> Schema changed</span>}
+            </div>}
+
+            {!viewed ? <EmptyState icon="database" title="Run your first check" text="Upload a new data batch above. Findings appear here, linked to the consumers they affect." />
+              : findings.length === 0 ? <div className="clear-state"><span className="tone-icon clean big"><Icon name="check" size={18} /></span><div><b>Everything looks good.</b><small>{viewed.report.passed_checks?.length ? `Passed: ${viewed.report.passed_checks.join(', ')}` : 'No configured checks failed on this batch.'}</small></div></div>
+              : <>
+                <div className="filter-row" role="tablist" aria-label="Filter by severity">
+                  <button role="tab" aria-selected={severityFilter === 'all'} className={`filter-chip ${severityFilter === 'all' ? 'active' : ''}`} onClick={() => setSeverityFilter('all')}>All <span>{findings.length}</span></button>
+                  {SEVERITIES.filter(s => severityCounts[s]).map(s => <button role="tab" aria-selected={severityFilter === s} key={s} className={`filter-chip ${s} ${severityFilter === s ? 'active' : ''}`} onClick={() => setSeverityFilter(s)}><Icon name={SEVERITY_ICON[s]} size={13} />{SEVERITY_LABEL[s]} <span>{severityCounts[s]}</span></button>)}
+                </div>
+                <div className="finding-list">
+                  {shownFindings.map((item, index) => <article className={`finding ${item.severity}`} key={`${viewed.id}-${item.check}-${item.columns.join(',')}-${index}`} style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}>
+                    <div className="finding-side"><span className={`severity-pill ${item.severity}`}><Icon name={SEVERITY_ICON[item.severity]} size={13} />{SEVERITY_LABEL[item.severity]}</span></div>
+                    <div className="finding-body">
+                      <div className="finding-title"><b>{item.title}</b><span className="check-name">{item.check}</span></div>
+                      <div className="finding-fields">{item.columns.length ? item.columns.map(col => <code key={col}>{col}</code>) : <code>dataset</code>}</div>
+                      <p className="measured">{item.measured_summary}</p>
+                      {item.examples?.length ? <p className="examples">Examples: {item.examples.join('; ')}</p> : null}
+                      <p className="explanation"><i>Possible explanation (suggested, not verified):</i> {item.suggested_explanation}</p>
+                      {item.ai_explanation && <p className="explanation ai"><i><Icon name="sparkle" size={12} /> AI-generated (unverified):</i> {item.ai_explanation}</p>}
+                    </div>
+                    <div className="finding-consumers">
+                      <small>Affects</small>
+                      {item.consumers?.length ? item.consumers.map(c => <span className="consumer-chip" key={c.name} title={c.dataset_wide ? 'Reads this dataset; the issue is dataset-wide' : `Uses ${c.columns.join(', ')}`}>{c.name}</span>) : <span className="muted">No mapped consumers</span>}
+                    </div>
+                  </article>)}
+                </div>
+              </>}
+            {viewed?.report?.ai_note && <div className="ai-note"><span><Icon name="sparkle" size={13} /> AI explanation</span>{viewed.report.ai_note}</div>}
           </section>
-          <section className="bottom-row"><div className="panel history-panel"><div className="section-title-line"><div><div className="panel-kicker">ACTIVITY</div><h2>Recent runs</h2></div><span className="history-count">{detail.runs.length} saved</span></div>{detail.runs.length ? detail.runs.slice(0, 5).map(run => <div className="history-item" key={run.id}><span className={`history-icon ${run.status}`}>{run.status === 'passed' ? '✓' : '!'}</span><div><b>{run.status === 'passed' ? (run.issue_count ? 'Passed with issues' : 'Quality checks passed') : 'Checks failed'}</b><small>{run.report.rows.current.toLocaleString()} rows · {fmtDate(run.created_at)}</small></div><span className={`history-findings ${run.status}`}>{run.issue_count ? `${run.issue_count} findings` : 'Clean'}</span></div>) : <div className="empty-small">Checks you run will be saved here.</div>}</div><div className="panel integration-panel"><div className="panel-kicker">BUILT FOR YOUR STACK</div><h2>One API. Every language.</h2><p>Send rows from Node, Java, Go, Ruby, Python, or any service that can make an HTTP request.</p><div className="language-chips"><span>Node.js</span><span>Java</span><span>Go</span><span>Ruby</span><span>Python</span><span>REST</span></div><button className="button dark" onClick={() => setShowConnect(true)}>Connect a service <span>→</span></button></div></section>
-        </>}
-        <footer><span>DataPulse <i>·</i> data quality in context</span><span>Built for pipelines in every stack <b>✦</b></span></footer>
+
+          <section className="bottom-row">
+            <div className="panel">
+              <div className="panel-head"><div><div className="kicker">Downstream impact</div><h2>What depends on this data</h2><p>When a field drifts, see the dashboards and models that may break.</p></div></div>
+              {detail.consumers.length ? <div className="consumer-list">{detail.consumers.map((consumer, i) => {
+                const affected = latest?.report.affected_consumers?.includes(consumer.name)
+                return <div className={`consumer-item ${affected ? 'affected' : ''}`} key={consumer.name}>
+                  <div className={`consumer-symbol c${i % 4}`}>{consumer.name.slice(0, 1).toUpperCase()}</div>
+                  <div className="consumer-main"><b>{consumer.name}</b><small>{consumer.type}{consumer.owner ? ` · ${consumer.owner}` : ''}{consumer.columns.length ? ` · ${consumer.columns.join(', ')}` : ''}</small></div>
+                  <span className={`state-chip ${affected ? 'affected' : ''}`}>{affected ? <><Icon name="alert" size={12} /> Affected</> : 'Mapped'}</span>
+                </div>
+              })}</div> : <EmptyState icon="layers" title="No consumers mapped" text="Add a consumers: section to the rules to see who is affected by each finding." action={<button className="button outline" onClick={() => setModal('rules')}><Icon name="edit" size={14} /> Edit rules</button>} />}
+            </div>
+            <div className="panel">
+              <div className="panel-head"><div><div className="kicker">Baseline profile</div><h2>Schema</h2><p>{allColumns.length ? `${allColumns.length} columns profiled from the trusted baseline.` : 'Columns appear once a baseline is saved.'}</p></div></div>
+              {allColumns.length ? <SchemaTable columns={allColumns} /> : <EmptyState icon="table" title="No baseline yet" text="Save a known-good file to see each column's type, null rate and cardinality." />}
+            </div>
+          </section>
+        </div>}
+
+        <footer><span>DataPulse · data quality in context</span><span>Same checks as the CLI, REST API and GitHub Action</span></footer>
       </div>
     </main>
 
-    {showConnect && <div className="modal-backdrop" role="presentation" onClick={() => setShowConnect(false)}><div className="connect-modal" role="dialog" aria-modal="true" aria-labelledby="connect-title" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowConnect(false)}>×</button><div className="modal-icon">⌘</div><div className="panel-kicker">LANGUAGE-AGNOSTIC INGESTION</div><h2 id="connect-title">Connect any service</h2><p>Send JSON rows to the DataPulse REST API from any language or runtime. The project API key is returned once when you create a project.</p><div className="endpoint-row"><span>POST</span><code>/api/projects/{detail?.id || '{project_id}'}/ingest</code></div><div className="code-snippet"><button onClick={() => curlSnippet && copy(curlSnippet)}>Copy</button><pre>{curlSnippet || `Create a project to get a project-specific endpoint and API key.`}</pre></div><div className="modal-hint"><b>For large datasets:</b> use the dashboard upload or run the GitHub Action against a file in your repository. The API accepts up to 50,000 JSON rows per request.</div><a href="http://localhost:8000/docs" target="_blank" rel="noreferrer" className="api-doc-link">Open interactive API docs ↗</a></div></div>}
+    <Toasts items={toasts} dismiss={dismiss} />
+
+    {modal === 'connect' && <Modal onClose={closeModal} labelledBy="connect-title">
+      <div className="modal-icon"><Icon name="plug" size={18} /></div>
+      <div className="kicker">Language-agnostic ingestion</div>
+      <h2 id="connect-title">Connect any service</h2>
+      <p>Send JSON rows to the REST API from any language or runtime. The project API key is returned once, when the project is created.</p>
+      <div className="endpoint-row"><span>POST</span><code>/api/projects/{detail?.id || '{project_id}'}/ingest</code></div>
+      {curlSnippet ? <CodeBlock code={curlSnippet} onCopy={() => copy(curlSnippet, 'Command copied.')} /> : <div className="modal-hint">Create a project to get a project-specific endpoint and API key.</div>}
+      <div className="language-chips">{['Node.js', 'Python', 'Go', 'Java', 'Ruby', 'C#', 'PHP', 'Rust'].map(l => <span key={l}>{l}</span>)}</div>
+      <div className="modal-hint"><b>Large datasets:</b> use the dashboard upload or the GitHub Action. The API accepts up to 50,000 rows per request.</div>
+      <a href={DOCS_URL} target="_blank" rel="noreferrer" className="link">Open interactive API docs <Icon name="external" size={13} /></a>
+    </Modal>}
+
+    {modal === 'rules' && detail && <Modal onClose={closeModal} labelledBy="rules-title">
+      <div className="modal-icon"><Icon name="edit" size={18} /></div>
+      <div className="kicker">{detail.name}</div>
+      <h2 id="rules-title">Quality rules</h2>
+      <p>This is the project's <code>datapulse.yml</code>, validated exactly like the CLI's.</p>
+      <textarea className="yaml-editor" value={configText} onChange={e => setConfigText(e.target.value)} spellCheck={false} aria-label="DataPulse YAML configuration"
+        onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveConfig() } }} />
+      <div className="modal-actions">
+        {detail.has_baseline && <button className="button outline" onClick={loadSuggestions}><Icon name="sparkle" size={14} /> Suggest from baseline</button>}
+        <span className="hint">Ctrl/⌘ + S to save</span>
+        <button className="button primary" onClick={saveConfig} disabled={savingConfig}>{savingConfig ? <><span className="spinner" /> Saving…</> : 'Save rules'}</button>
+      </div>
+      {suggestions && <div className="suggestions"><b>Suggested rules — review before copying; nothing was applied.</b><CodeBlock code={suggestions} onCopy={() => copy(suggestions, 'Suggestions copied.')} /></div>}
+    </Modal>}
+
+    {modal === 'new' && <Modal onClose={closeModal} labelledBy="new-title">
+      <div className="modal-icon"><Icon name="plus" size={18} /></div>
+      <div className="kicker">Start monitoring</div>
+      <h2 id="new-title">New data project</h2>
+      <CreateForm projectName={projectName} setProjectName={setProjectName} creating={creating} createProject={createProject} autoFocus />
+      <div className="divider"><span>or</span></div>
+      <button className="button outline full" onClick={seedDemo} disabled={seeding}>{seeding ? <><span className="spinner" /> Loading…</> : <><Icon name="sparkle" size={14} /> Load the sample workspace</>}</button>
+    </Modal>}
+  </div>
+}
+
+function Stat({ label, icon, value, foot, tone }: { label: string; icon: 'activity' | 'flag' | 'check' | 'shield'; value: string; foot: ReactNode; tone?: string }) {
+  return <div className={`stat-card ${tone ? `tone-${tone}` : ''}`}>
+    <div className="stat-label">{label}<Icon name={icon} size={15} /></div>
+    <div className="stat-value">{value}</div>
+    <div className="stat-foot">{foot}</div>
+  </div>
+}
+
+function EmptyState({ icon, title, text, action }: { icon: 'activity' | 'database' | 'layers' | 'table'; title: string; text: string; action?: ReactNode }) {
+  return <div className="empty-state"><span className="empty-icon"><Icon name={icon} size={22} /></span><b>{title}</b><span>{text}</span>{action}</div>
+}
+
+function LoadingView() {
+  return <div className="loading-view" aria-busy="true" aria-label="Loading">
+    <div className="skeleton" style={{ width: 120, height: 14 }} /><div className="skeleton" style={{ width: 320, height: 38, marginTop: 14 }} />
+    <div className="summary-grid" style={{ marginTop: 28 }}>{[0, 1, 2, 3].map(i => <div key={i} className="skeleton" style={{ height: 112 }} />)}</div>
+    <div className="work-grid">{[0, 1].map(i => <div key={i} className="skeleton" style={{ height: 320 }} />)}</div>
+  </div>
+}
+
+type CreateProps = { projectName: string; setProjectName: (v: string) => void; creating: boolean; createProject: (e: FormEvent) => void; autoFocus?: boolean }
+
+function CreateForm({ projectName, setProjectName, creating, createProject, autoFocus }: CreateProps) {
+  return <form onSubmit={createProject} className="create-form">
+    <label htmlFor="project-name">Project name</label>
+    <div className="input-button">
+      <input id="project-name" autoFocus={autoFocus} value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="e.g. Orders pipeline" minLength={2} maxLength={80} required />
+      <button className="button primary" disabled={creating || projectName.trim().length < 2}>{creating ? <><span className="spinner" /> Creating…</> : <>Create <Icon name="arrow" size={14} /></>}</button>
+    </div>
+  </form>
+}
+
+function Welcome(props: CreateProps & { seeding: boolean; seedDemo: () => void; openConnect: () => void }) {
+  return <div className="fade-in">
+    <section className="hero">
+      <div>
+        <div className="eyebrow"><span className="pulse healthy"></span>Data observability · language agnostic</div>
+        <h1>Trust your data<br /><em>in every deploy.</em></h1>
+        <p>Catch schema drift and quality issues before they break the dashboards, models and services that depend on your data.</p>
+      </div>
+      <div className="hero-art" aria-hidden="true">
+        <div className="orbit orbit-one"></div><div className="orbit orbit-two"></div><div className="orbit orbit-three"></div>
+        <div className="orbit-center"><BrandMark large /></div>
+        <div className="orbit-node n1">CSV</div><div className="orbit-node n2">JSON</div><div className="orbit-node n3">API</div><div className="orbit-node n4">PARQUET</div>
+      </div>
+    </section>
+    <section className="welcome-grid">
+      <div className="panel welcome-card">
+        <div className="kicker">Start monitoring</div>
+        <h2>Create a data project</h2>
+        <p>Connect a dataset and DataPulse builds a baseline you can check on every release.</p>
+        <CreateForm {...props} />
+        <div className="format-row"><span>Supported</span>{['CSV', 'JSON', 'JSONL', 'Parquet'].map(f => <b key={f}>{f}</b>)}</div>
+      </div>
+      <div className="panel welcome-card sample-card">
+        <div className="kicker"><Icon name="sparkle" size={13} /> Interactive starter</div>
+        <h2>Explore a working dataset</h2>
+        <p>Load a sample orders dataset with a baseline, downstream map and quality rules — then upload a changed file to watch the monitor work.</p>
+        <button className="button primary" onClick={props.seedDemo} disabled={props.seeding}>{props.seeding ? <><span className="spinner" /> Loading…</> : <>Load sample workspace <Icon name="arrow" size={14} /></>}</button>
+      </div>
+      <button className="wide-note" onClick={props.openConnect}>
+        <span className="wide-icon"><Icon name="plug" size={16} /></span>
+        <span className="wide-text"><b>Connect any language over HTTP</b><small>Java · JavaScript · Go · Ruby · Python · anything that can send JSON</small></span>
+        <span className="link">View API pattern <Icon name="arrow" size={14} /></span>
+      </button>
+    </section>
   </div>
 }
