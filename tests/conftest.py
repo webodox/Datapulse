@@ -1,4 +1,5 @@
 import sqlite3
+import sys
 from contextlib import closing
 from pathlib import Path
 
@@ -10,6 +11,12 @@ from typer.testing import CliRunner
 from datapulse.baseline import build_baseline
 from datapulse.samples import store_system
 from datapulse.config import Config, parse_config
+
+# The API tests import the `server` package from the repository root; make it importable however pytest is run
+# (`datapulse test` doesn't put the current folder on the path), whichever test file is collected first.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def make_df(n: int = 500, seed: int = 0) -> pd.DataFrame:
