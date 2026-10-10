@@ -1,7 +1,8 @@
 """Turn any supported file into a table.
 
-Spreadsheets and JSON stay tables. PDFs, Word, email, text, HTML, images and zip archives go through the
-document unifier: with an AI key, records are extracted; without one, each document is one row of its text.
+Spreadsheets and JSON stay tables. A PDF that contains a table (one row of the data per line) is read back
+as that table. Other PDFs, Word, email, text, HTML, images and zip archives go through the document unifier:
+with an AI key, records are extracted; without one, each document is one row of its text.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from datapulse.unifier.documents import expand_zip, is_document, is_tabular
 from datapulse.unifier.pipeline import unify_files
 
 from .base import SourceError
+from .tabular_text import table_from_text
 
 
 def frame_from_path(path, label: str | None = None) -> pd.DataFrame:
@@ -31,6 +33,10 @@ def frame_from_path(path, label: str | None = None) -> pd.DataFrame:
     if is_tabular(path):
         return load_dataframe(path)
     if is_document(path):
+        if ext == ".pdf":
+            table = _pdf_table(path, label)
+            if table is not None:
+                return table
         return _rows([(path, label)], label)
     raise SourceError(
         f"Unsupported file type '{path.suffix or 'unknown'}'. "
@@ -47,6 +53,16 @@ def frame_from_bytes(data: bytes, name: str) -> pd.DataFrame:
     path = dest / f"download{ext}"
     path.write_bytes(data)
     return frame_from_path(path, name)
+
+
+def _pdf_table(path, label: str) -> pd.DataFrame | None:
+    """The spreadsheet inside a PDF, or None when the PDF is prose, a scan, or a picture."""
+    from datapulse.unifier.documents import read_documents
+
+    docs, _skipped = read_documents([(path, label)])
+    if len(docs) != 1:
+        return None
+    return table_from_text(docs[0].text, label)
 
 
 def _rows(files, label: str) -> pd.DataFrame:

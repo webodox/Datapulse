@@ -32,7 +32,8 @@ def stored_path(value: str) -> Path:
 class File(Source):
     kind, label, group = "file", "File", "Files & links"
     description = ("Upload a spreadsheet (CSV, Excel, JSON, Parquet) or a document (PDF, Word, email, text, "
-                   "HTML, image, zip). Use the sample orders file to try it. Upload a newer version by editing the source.")
+                   "HTML, image, zip). A PDF of a table is read as that table. Use the sample orders file to try it. "
+                   "Upload a newer version by editing the source.")
     has_sample = True
     fields = (Field("file", "File", "CSV, Excel, JSON, PDF, Word, email, text, or zip · up to 25 MB", input="file"),)
 
