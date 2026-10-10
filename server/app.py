@@ -39,6 +39,7 @@ from .core import (MAX_INGEST_ROWS, MAX_UPLOAD_BYTES, ROOT, ai_call, baseline_su
                    loads, project_config, project_row, record_dataset, run_check, save_upload,
                    load_upload)
 from .db import configure_sources, connect, init_db, now_iso, samples_dir, upload_dir
+from .destinations import router as destinations_router
 from .sources import add_sample_sources, remove_uploaded_files, router as sources_router
 
 
@@ -60,6 +61,7 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 app.include_router(sources_router)
+app.include_router(destinations_router)
 
 
 @app.middleware("http")
@@ -207,7 +209,8 @@ def delete_project(project_id: str) -> dict:
                                                           (project_id,))]
         remove_uploaded_files(db.execute("SELECT kind, settings_json FROM sources WHERE project_id = ?",
                                          (project_id,)).fetchall())
-        for table, column in (("runs", "project_id"), ("sources", "project_id"), ("datasets", "project_id"),
+        for table, column in (("runs", "project_id"), ("sources", "project_id"), ("destinations", "project_id"),
+                              ("datasets", "project_id"),
                               ("projects", "id")):
             db.execute(f"DELETE FROM {table} WHERE {column} = ?", (project_id,))
     for f in files:

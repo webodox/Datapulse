@@ -154,7 +154,7 @@ function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectI
 
     {report.issues.length > 0 && <ReviewBar run={run} projectId={projectId} changed={changed} />}
     {report.source && <SourceNote projectId={projectId} run={run} />}
-    {report.unified && <UnifiedNote projectId={projectId} run={run} />}
+    {report.unified && <UnifiedNote projectId={projectId} run={run} changed={changed} />}
     {report.issues.length > 0 && <InvestigateSection run={run} projectId={projectId} ai={ai} changed={changed} select={select} />}
 
     {counts.length > 1 && <div className="filters">

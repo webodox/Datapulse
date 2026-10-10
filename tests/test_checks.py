@@ -118,3 +118,10 @@ def test_fail_on_warning_makes_warnings_fail(baseline, cfg, df):
     assert run_checks(baseline, cur, cfg).exit_code == 1
     cfg.fail_on = "never"
     assert run_checks(baseline, cur, cfg).exit_code == 0
+
+
+def test_duplicate_examples_handle_empty_keys(baseline, df, cfg):
+    bad = df.copy()
+    bad["order_id"] = None  # e.g. a source whose key column didn't map: every key is empty
+    issue = next(i for i in run_checks(baseline, bad, cfg).issues if i.check == "duplicates")
+    assert issue.measured["duplicate_rows"] == len(bad) - 1

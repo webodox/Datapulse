@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { api, plural, timeAgo, type Mapping, type ProjectDetail, type Run, type Source, type SourceKind, type Step } from './api'
+import { api, plural, timeAgo, type Destination, type DestinationForm, type Mapping, type ProjectDetail, type Run, type Source, type SourceKind, type Step } from './api'
 import { Icon, type IconName } from './icons'
 import { Empty, Modal, Spinner, useAction, useNotify } from './ui'
 
@@ -54,7 +54,9 @@ export function SourcesTab({ detail, changed, ai, openRun }:
   const unify = () => act('unify', async () => {
     const report = await api.unify(detail.id)
     await refresh(); openRun(report.run_id)
-    notify.ok(`Unified ${plural(report.rows.current, 'row')}: ${report.issues.length ? plural(report.issues.length, 'issue') + ' to review' : 'all clear'}`)
+    const sent = (report.delivered || []).filter(d => d.ok).length, held = (report.delivered || []).some(d => d.held)
+    notify.ok(`Unified ${plural(report.rows.current, 'row')}: ${report.issues.length ? plural(report.issues.length, 'issue') + ' to review' : 'all clear'}`
+      + (sent ? ` · sent to ${plural(sent, 'destination')}` : held ? ' · held back from your database' : ''))
   })
 
   const lastUnified = detail.runs.find(r => r.report.unified)
@@ -98,6 +100,8 @@ export function SourcesTab({ detail, changed, ai, openRun }:
       {list.map(s => <SourceCard key={s.id} source={s} kinds={kinds} detail={detail} ai={ai}
         refresh={refresh} edit={() => setEditing(s)} openRun={openRun} />)}
     </div>}
+
+    {detail.has_baseline && <Destinations projectId={detail.id} />}
 
     {editing && <SourceDialog projectId={detail.id} kinds={kinds} source={editing === 'new' ? null : editing}
       close={() => setEditing(null)} saved={() => { setEditing(null); reload() }} />}
@@ -294,8 +298,18 @@ export function SourceNote({ projectId, run }: { projectId: string; run: Run }) 
   </div>
 }
 
-export function UnifiedNote({ projectId, run }: { projectId: string; run: Run }) {
+export function UnifiedNote({ projectId, run, changed }: { projectId: string; run: Run; changed: () => Promise<unknown> }) {
   const kinds = useCatalog()
+  const notify = useNotify()
+  const [busy, act] = useAction()
+  const delivered = run.report.delivered || []
+  const resend = () => act('send', async () => {
+    const { delivered } = await api.sendRun(projectId, run.id)
+    await changed()
+    if (!delivered.length) notify.ok('Add a destination on the Sources tab first')
+    else if (delivered.every(d => d.ok)) notify.ok(`Sent to ${plural(delivered.length, 'destination')}`)
+    else notify.fail(new Error(delivered.find(d => !d.ok)!.message))
+  })
   return <div className="source-note unified">
     <Icon name="database" size={15} />
     <span>Combined from {plural(run.report.unified!.sources.filter(s => !s.error).length, 'source')}, each converted to the standard.</span>
@@ -305,5 +319,90 @@ export function UnifiedNote({ projectId, run }: { projectId: string; run: Run })
       {s.error ? <em className="bad">{s.error}</em> : <span>{s.rows.toLocaleString()} rows</span>}
       {s.problems.map(p => <em key={p} className="bad">{p}</em>)}
     </li>)}</ul>
+    {delivered.length > 0 && <ul className="deliveries">{delivered.map(d => <li key={d.id} className={d.ok ? 'ok' : d.held ? 'held' : 'bad'}>
+      <Icon name={d.ok ? 'check' : d.held ? 'shield' : 'alert'} size={13} /><b>{d.name}</b><span>{d.message}</span>
+    </li>)}</ul>}
+    {run.status === 'passed' && (!delivered.length || delivered.some(d => !d.ok)) &&
+      <button className="button ghost" disabled={!!busy} onClick={resend}>{busy ? <Spinner text="Sending…" /> : <><Icon name="upload" size={14} /> Send to your database</>}</button>}
   </div>
+}
+
+/* ---------- destinations: send unified data into the company's own database ---------- */
+
+function Destinations({ projectId }: { projectId: string }) {
+  const notify = useNotify()
+  const [list, setList] = useState<Destination[] | null>(null)
+  const [editing, setEditing] = useState<Destination | 'new' | null>(null)
+  const [busy, act] = useAction()
+  const reload = useCallback(() => api.destinations(projectId).then(setList), [projectId])
+  useEffect(() => { reload().catch(notify.fail) }, [reload, notify])
+  if (!list) return null
+  const remove = (d: Destination) => {
+    if (!window.confirm(`Stop sending to "${d.name}"? Data already sent stays in your database.`)) return
+    act(d.id, async () => { await api.removeDestination(projectId, d.id); await reload() })
+  }
+  return <section className="card destinations">
+    <div className="card-head">
+      <div><h2>Send unified data to</h2>
+        <p className="muted">Every time you unify, the result is written into your own database, but only if it passes its checks.</p></div>
+      <button className="button outline" onClick={() => setEditing('new')}><Icon name="plus" size={14} /> Add destination</button>
+    </div>
+    {list.length === 0 ? <p className="muted">No destination yet. Unified data can still be downloaded.</p>
+      : <ul className="destination-list">{list.map(d => <li key={d.id}>
+        <span className="source-icon"><Icon name="database" size={16} /></span>
+        <div><b>{d.name}</b>
+          <small className="muted">{d.type} · table <code>{d.table}</code> · {d.mode === 'replace' ? 'replaced each time' : 'new rows added each time'}</small>
+          {d.last_result && <small className="muted">Last: {d.last_result} · {timeAgo(d.last_sent_at || undefined)}</small>}
+        </div>
+        <button className="button ghost" onClick={() => setEditing(d)}>Edit</button>
+        <button className="button ghost danger" disabled={busy === d.id} onClick={() => remove(d)} aria-label={`Remove ${d.name}`}><Icon name="trash" size={14} /></button>
+      </li>)}</ul>}
+    {editing && <DestinationDialog projectId={projectId} destination={editing === 'new' ? null : editing}
+      close={() => setEditing(null)} saved={() => { setEditing(null); reload() }} />}
+  </section>
+}
+
+function DestinationDialog({ projectId, destination, close, saved }:
+  { projectId: string; destination: Destination | null; close: () => void; saved: () => void }) {
+  const notify = useNotify()
+  const [busy, act] = useAction()
+  const [form, setForm] = useState<DestinationForm>({ name: destination?.name || '', url: '', table: destination?.table || 'unified_data', mode: destination?.mode || 'replace' })
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const set = (k: keyof DestinationForm, v: string) => { setForm(f => ({ ...f, [k]: v })); setResult(null) }
+  const test = () => act('test', async () => setResult(await api.testDestination(projectId, form, destination?.id)))
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    act('save', async () => {
+      const body = { ...form, name: form.name.trim() || 'My database' }
+      if (destination) await api.editDestination(projectId, destination.id, body)
+      else await api.addDestination(projectId, body)
+      notify.ok(`${body.name} saved. Unified data will be sent there.`)
+      saved()
+    })
+  }
+  return <Modal title={destination ? `Edit ${destination.name}` : 'Send unified data to your database'} onClose={close}>
+    <form className="source-form" onSubmit={submit}>
+      <label>Name<input value={form.name} onChange={e => set('name', e.target.value)} placeholder="e.g. Company warehouse" maxLength={80} /></label>
+      <label>Connection URL
+        <input type="password" value={form.url} onChange={e => set('url', e.target.value)} autoComplete="off" spellCheck={false}
+          placeholder={destination ? 'Saved. Leave empty to keep it' : 'postgresql://user:password@host:5432/database'} />
+        {form.url && detected(form.url) ? <small className="detected"><Icon name="check" size={12} /> {detected(form.url)}</small>
+          : <small className="muted">PostgreSQL, Supabase, MySQL, SQL Server, MongoDB… The user needs permission to write this table.</small>}
+      </label>
+      <label>Table<input value={form.table} onChange={e => set('table', e.target.value)} spellCheck={false} placeholder="unified_data" />
+        <small className="muted">Created on the first send if it doesn't exist. Only this table is ever written. For MongoDB: a collection.</small></label>
+      <div className="mode-pick" role="radiogroup" aria-label="Each time">
+        {(['replace', 'append'] as const).map(m => <label key={m} className={form.mode === m ? 'on' : ''}>
+          <input type="radio" name="mode" checked={form.mode === m} onChange={() => set('mode', m)} />
+          <span><b>{m === 'replace' ? 'Replace' : 'Add rows'}</b><small>{m === 'replace' ? 'The table always holds the latest unified data' : 'Each unify adds its rows, keeping history'}</small></span>
+        </label>)}
+      </div>
+      <p className="muted small"><Icon name="shield" size={13} /> The URL stays on the DataPulse server. Data that fails its checks is never sent.</p>
+      {result && <p className={`test-result ${result.ok ? 'ok' : 'bad'}`}><Icon name={result.ok ? 'check' : 'alert'} size={14} /> {result.message}</p>}
+      <div className="actions">
+        <button type="button" className="button outline" disabled={!!busy || (!form.url && !destination)} onClick={test}>{busy === 'test' ? <Spinner text="Connecting…" /> : 'Test connection'}</button>
+        <button className="button primary" disabled={!!busy}>{busy === 'save' ? <Spinner text="Saving…" /> : destination ? 'Save changes' : 'Add destination'}</button>
+      </div>
+    </form>
+  </Modal>
 }

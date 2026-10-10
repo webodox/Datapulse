@@ -186,7 +186,8 @@ def check_duplicates(base: Dict, df: pd.DataFrame, cfg: Config) -> List[Issue]:
         return []
     examples: List[str] = []
     if keys and cfg.report.show_values:
-        vc = df.loc[mask, keys].astype(str).agg(" | ".join, axis=1).value_counts()
+        # map(str), not astype(str): newer pandas keeps empty values as NaN in astype(str), which join can't take
+        vc = df.loc[mask, keys].apply(lambda col: col.map(str)).agg(" | ".join, axis=1).value_counts()
         examples = [f"{k} ({c + 1} rows)" for k, c in vc.head(cfg.report.max_examples).items()]
     what = f"key {keys}" if keys else "whole rows"
     return [Issue("duplicates", dp.severity, "Duplicate rows detected",
