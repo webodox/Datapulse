@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, API_ORIGIN, fmtDate, plural, runTone, timeAgo, SEVERITIES, TONE_LABEL,
-  type Issue, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft, type ReviewStatus } from './api'
+  type Issue, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft, type ReviewStatus, type Fix, type ColumnChart } from './api'
 import type { Route } from './App'
+import { BeforeAfter, NullRates } from './charts'
 import { Icon, type IconName } from './icons'
 import { CodeBlock, copyText, Dropzone, Empty, Spinner, useAction, useNotify } from './ui'
 
@@ -106,7 +107,7 @@ function ChecksTab({ detail, runId, select, changed, ai }: { detail: ProjectDeta
     </div>
     {viewed ? <div className="checks-layout">
       <RunHistory runs={detail.runs} selected={viewed.id} select={select} />
-      <RunReport key={viewed.id} run={viewed} projectId={detail.id} ai={ai} changed={changed} />
+      <RunReport key={viewed.id} run={viewed} projectId={detail.id} ai={ai} changed={changed} select={select} />
     </div> : <Empty icon="activity" title="No checks yet"><span>Drop a file above. Results and history appear here.</span></Empty>}
   </>
 }
@@ -130,7 +131,7 @@ function RunHistory({ runs, selected, select }: { runs: Run[]; selected: string;
   </aside>
 }
 
-function RunReport({ run, projectId, ai, changed }: { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown> }) {
+function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; select: (id?: string) => void }) {
   const notify = useNotify()
   const [filter, setFilter] = useState<Severity | null>(null)
   const { report } = run
@@ -151,6 +152,7 @@ function RunReport({ run, projectId, ai, changed }: { run: Run; projectId: strin
 
     {report.issues.length > 0 && <ReviewBar run={run} projectId={projectId} changed={changed} />}
     {report.issues.length > 0 && <TriageSection run={run} projectId={projectId} ai={ai} changed={changed} />}
+    {report.issues.length > 0 && <FixSection run={run} projectId={projectId} ai={ai} changed={changed} select={select} />}
 
     {counts.length > 1 && <div className="filters">
       <button className={!filter ? 'on' : ''} onClick={() => setFilter(null)}>All {report.issues.length}</button>
@@ -158,13 +160,13 @@ function RunReport({ run, projectId, ai, changed }: { run: Run; projectId: strin
         <Icon name={SEVERITY_ICON[s]} size={13} /> {n} {s}</button>)}
     </div>}
 
-    {shown.map((issue, i) => <IssueCard key={`${issue.check}-${issue.columns}-${i}`} issue={issue} />)}
+    {shown.map((issue, i) => <IssueCard key={`${issue.check}-${issue.columns}-${i}`} issue={issue} charts={report.charts} />)}
     {report.ai_note && <p className="note"><Icon name="sparkle" size={13} /> {report.ai_note}</p>}
     {report.passed_checks.length > 0 && <p className="passed"><Icon name="check" size={14} /> Passed: {report.passed_checks.map(c => c.replace('_', ' ')).join(', ')}</p>}
   </section>
 }
 
-function IssueCard({ issue }: { issue: Issue }) {
+function IssueCard({ issue, charts }: { issue: Issue; charts?: Record<string, ColumnChart> }) {
   const measured = Object.entries(issue.measured || {})
   return <article className={`issue ${issue.severity}`}>
     <header>
@@ -173,6 +175,7 @@ function IssueCard({ issue }: { issue: Issue }) {
     </header>
     <p>{issue.measured_summary}</p>
     {issue.check === 'ml_drift' && <DriftBars issue={issue} />}
+    <IssueChart issue={issue} charts={charts} />
     <p className="cause"><b>Possible cause</b> {issue.suggested_explanation}</p>
     {issue.ai_explanation && <p className="cause ai"><b><Icon name="sparkle" size={12} /> AI suggestion</b> {issue.ai_explanation}</p>}
     {issue.consumers.length > 0 && <p className="affects"><b>May affect</b>{issue.consumers.map(c =>
@@ -201,6 +204,68 @@ function ReviewBar({ run, projectId, changed }: { run: Run; projectId: string; c
     </div>
     <small className="muted">{by ? `${REVIEW[status]} by ${by} · ${timeAgo(at || undefined)}` : 'Nobody has picked this up yet'}</small>
   </div>
+}
+
+/** The before/after picture for issues where one exists: value ranges for shifts, empty rates for nulls. */
+function IssueChart({ issue, charts }: { issue: Issue; charts?: Record<string, ColumnChart> }) {
+  const column = issue.columns[0]
+  const chart = column ? charts?.[column] : undefined
+  if (!chart) return null
+  if ((issue.check === 'distribution' || issue.check === 'ml_drift') && chart.hist) return <BeforeAfter column={column} chart={chart.hist} />
+  if (issue.check === 'null_rate') return <NullRates column={column} rates={chart.null_rate} />
+  return null
+}
+
+/* ---------- AI repair agent ---------- */
+
+function FixSection({ run, projectId, ai, changed, select }:
+  { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; select: (id?: string) => void }) {
+  const notify = useNotify()
+  const [busy, act] = useAction()
+  const fix = run.report.fix
+  if (fix) return <FixPanel fix={fix} projectId={projectId} runId={run.id} busy={busy}
+    recheck={() => act('recheck', async () => {
+      const report = await api.checkFixed(projectId, run.id)
+      await changed(); select(report.run_id)
+      notify.ok(`Fixed file checked: ${plural(report.issues.length, 'issue')} left`)
+    })} />
+  return <div className="triage-cta fix-cta">
+    <span className="triage-icon"><Icon name="wrench" size={18} /></span>
+    <div>
+      <b>{busy ? 'The AI agent is repairing a copy…' : 'Let the AI fix what it safely can'}</b>
+      <small>{busy ? 'It applies repairs one at a time and re-checks after each. About 30–60 seconds.'
+        : ai ? 'Repairs a copy of this file (your original is never changed), then re-runs every check to prove it worked.'
+        : 'AI is off. Set ANTHROPIC_API_KEY on the server to turn it on.'}</small>
+    </div>
+    <button className="button primary" disabled={!ai || !!busy} onClick={() => act('fix', async () => { await api.fix(projectId, run.id); await changed() })}>
+      {busy ? <Spinner text="Repairing…" /> : <><Icon name="wrench" size={14} /> Fix with AI</>}
+    </button>
+  </div>
+}
+
+function FixPanel({ fix, projectId, runId, busy, recheck }: { fix: Fix; projectId: string; runId: string; busy: string | null; recheck: () => void }) {
+  return <section className="triage fix">
+    <header>
+      <span className="pill verdict clean"><Icon name="wrench" size={12} /> Repaired copy</span>
+      <small className="muted"><Icon name="sparkle" size={12} /> AI repair{fix.by && ` · requested by ${fix.by}`}</small>
+    </header>
+    <div className="fix-score">
+      <div><small>Issues</small><b>{fix.before.total} <span>→</span> {fix.after.total}</b></div>
+      <div><small>Critical</small><b>{fix.before.critical} <span>→</span> {fix.after.critical}</b></div>
+      <div><small>Rows</small><b>{fix.rows.before.toLocaleString()} <span>→</span> {fix.rows.after.toLocaleString()}</b></div>
+    </div>
+    <p>{fix.summary}</p>
+    {fix.operations.length > 0 && <><h4>What it changed</h4>
+      <ol className="causes">{fix.operations.map((op, i) => <li key={i}><span className="conf done">fixed</span>
+        <div><b>{op.effect}</b><small>{op.reason}</small></div></li>)}</ol></>}
+    {fix.not_fixed.length > 0 && <><h4>Left for a person</h4>
+      <ul className="notify">{fix.not_fixed.map((n, i) => <li key={i}><b>{n.issue}</b> {n.why}</li>)}</ul></>}
+    {fix.warnings.map((w, i) => <p key={i} className="note"><Icon name="info" size={13} /> {w}</p>)}
+    <div className="actions">
+      <a className="button primary" href={api.fixedUrl(projectId, runId)} download={fix.file_name}><Icon name="download" size={14} /> Download {fix.file_name}</a>
+      <button className="button outline" disabled={!!busy} onClick={recheck}>{busy === 'recheck' ? <Spinner text="Checking…" /> : 'Check the fixed file'}</button>
+    </div>
+  </section>
 }
 
 /* ---------- AI triage agent ---------- */

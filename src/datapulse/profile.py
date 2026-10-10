@@ -83,3 +83,20 @@ def profile_dataframe(df: pd.DataFrame, max_categories: int = 50) -> Dict[str, A
             info["categories"] = {str(k): int(v) for k, v in counts.items()}
         columns[str(name)] = info
     return {"rows": n, "duplicate_rows": int(df.duplicated().sum()) if n else 0, "columns": columns}
+
+
+def chart_data(baseline_profile: Dict[str, Any], df: pd.DataFrame) -> Dict[str, Any]:
+    """Baseline vs. current per column, for before/after charts: empty-value rates, and for numeric columns the
+    share of values in each of the baseline's histogram buckets (so both sides use the same buckets)."""
+    out: Dict[str, Any] = {}
+    for col, b in baseline_profile["columns"].items():
+        present = col in df.columns
+        entry: Dict[str, Any] = {"null_rate": [round(b["null_rate"], 4),
+                                               round(float(df[col].isna().mean()), 4) if present and len(df) else None]}
+        bn = b.get("numeric")
+        values = numeric_values(df[col]) if present and bn else None
+        if bn and values is not None and not values.empty:
+            entry["hist"] = {"edges": bn["bin_edges"], "baseline": [round(p, 4) for p in bn["bin_props"]],
+                             "current": [round(p, 4) for p in bin_proportions(values.to_numpy(), bn["bin_edges"])]}
+        out[col] = entry
+    return out

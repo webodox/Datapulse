@@ -264,3 +264,37 @@ def test_older_databases_are_upgraded_in_place(tmp_path, monkeypatch):
         pass
     db = sqlite3.connect(tmp_path / "old" / "datapulse.sqlite3")
     assert db.execute("SELECT review_status, created_by FROM runs").fetchone() == ("open", None)
+
+
+def test_repair_agent_endpoint_download_and_recheck(client, monkeypatch):
+    from fake_claude import FakeClaude, text, tool_calls
+    seeded = client.post("/api/demo/seed").json()
+    drifted = (ROOT / "examples" / "data" / "orders_drifted.csv").read_bytes()
+    doc = client.post(f"/api/projects/{seeded['id']}/runs", files={"file": ("orders_drifted.csv", drifted, "text/csv")}).json()
+    assert doc["charts"]["amount"]["hist"]["current"][-1] == 1.0  # chart data is saved with every check
+    base = f"/api/projects/{seeded['id']}/runs/{doc['run_id']}"
+    assert client.get(f"{base}/fixed").status_code == 404  # nothing repaired yet
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert client.post(f"{base}/fix").status_code == 503
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    summary = {"summary": "s", "not_fixed": [], "warnings": []}
+    monkeypatch.setattr("datapulse.fix.get_client", lambda cfg: FakeClaude([
+        tool_calls(("scale_column", {"column": "amount", "factor": 0.01, "reason": "cents"}),
+                   ("convert_to_number", {"column": "quantity", "reason": "units"}),
+                   ("remove_duplicates", {"columns": ["order_id"], "reason": "dupes"})),
+        text(json.dumps(summary))]))
+    fix = client.post(f"{base}/fix").json()
+    assert fix["by"] == "Ada Admin" and fix["file_name"] == "orders_drifted-fixed.csv"
+    assert fix["after"]["total"] < fix["before"]["total"] == 9
+    assert client.get(f"/api/projects/{seeded['id']}").json()["runs"][0]["report"]["fix"]["dataset_id"] == fix["dataset_id"]
+
+    r = client.get(f"{base}/fixed")
+    assert r.status_code == 200 and "orders_drifted-fixed.csv" in r.headers["content-disposition"]
+    assert len(r.text.strip().splitlines()) == 371  # header + 370 rows (10 duplicates removed)
+
+    recheck = client.post(f"{base}/fixed/check").json()
+    assert recheck["data_file"] == "orders_drifted-fixed.csv" and len(recheck["issues"]) == fix["after"]["total"]
+    runs = client.get(f"/api/projects/{seeded['id']}").json()["runs"]
+    assert [r["report"]["data_file"] for r in runs[:2]] == ["orders_drifted-fixed.csv", "orders_drifted.csv"]

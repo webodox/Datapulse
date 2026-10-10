@@ -18,7 +18,7 @@ from typing import Any, Dict, Literal, Optional
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -29,8 +29,9 @@ from datapulse.baseline import build_baseline, describe
 from datapulse.checks import run_checks
 from datapulse.config import STARTER_CONFIG, Config, parse_config_text
 from datapulse.errors import DataPulseError
+from datapulse.fix import RepairSession, run_repair
 from datapulse.io import SUPPORTED, load_dataframe
-from datapulse.profile import profile_dataframe
+from datapulse.profile import chart_data, profile_dataframe
 from datapulse.report import render_json, render_markdown
 from datapulse.suggest import render_yaml, suggest_rules
 
@@ -190,7 +191,8 @@ def _run_check(project: sqlite3.Row, name: str, path: Path, df: pd.DataFrame, us
     doc = json.loads(render_json(report))
     dataset_id = _record_dataset(project["id"], name, path, "candidate", df)
     run_id = uuid.uuid4().hex[:12]
-    doc.update(run_id=run_id, ai_note=ai_note or None, markdown=render_markdown(report))
+    doc.update(run_id=run_id, ai_note=ai_note or None, markdown=render_markdown(report),
+               charts=chart_data(baseline["profile"], df))
     with connect() as db:
         db.execute("INSERT INTO runs (id, project_id, dataset_id, status, issue_count, report_json, created_at, "
                    "created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (run_id, project["id"], dataset_id, doc["status"],
@@ -388,6 +390,64 @@ def triage_run(project_id: str, run_id: str, request: Request) -> dict:
     with connect() as db:
         db.execute("UPDATE runs SET report_json = ? WHERE id = ?", (json.dumps(doc), run_id))
     return doc["triage"]
+
+
+def _run_row(project_id: str, run_id: str) -> sqlite3.Row:
+    with connect() as db:
+        run = db.execute("SELECT * FROM runs WHERE id = ? AND project_id = ?", (run_id, project_id)).fetchone()
+    if run is None:
+        raise HTTPException(404, "Run not found")
+    return run
+
+
+def _fixed_file(project_id: str, run_id: str) -> tuple:
+    """The repaired file of a run: (path, download name)."""
+    fix = json.loads(_run_row(project_id, run_id)["report_json"]).get("fix")
+    with connect() as db:
+        row = db.execute("SELECT filename FROM datasets WHERE id = ?", (fix["dataset_id"],)).fetchone() if fix else None
+    if row is None or not Path(row["filename"]).exists():
+        raise HTTPException(404, "This check has no repaired file yet")
+    return Path(row["filename"]), fix["file_name"]
+
+
+@app.post("/api/projects/{project_id}/runs/{run_id}/fix")
+def fix_run(project_id: str, run_id: str, request: Request) -> dict:
+    """Let the AI repair agent fix a copy of the run's file, then re-check it. The original is never changed."""
+    project = _project(project_id)
+    run = _run_row(project_id, run_id)
+    doc = json.loads(run["report_json"])
+    if not doc["issues"]:
+        raise HTTPException(409, "This run passed cleanly; there is nothing to fix")
+    df = _dataset_rows(run["dataset_id"])
+    if df is None:
+        raise HTTPException(409, "The file for this check is no longer stored, so it can't be repaired")
+    cfg = _config(project["config_yaml"])
+    session = RepairSession(df, json.loads(project["baseline_json"]), cfg,
+                            reference=_dataset_rows(project["baseline_dataset_id"]))
+    result = _ai(lambda: run_repair(session))
+    fixed = result.pop("fixed_frame")
+    stem = Path(doc.get("data_file") or "data").stem
+    path = upload_dir() / f"{uuid.uuid4().hex}.csv"
+    fixed.to_csv(path, index=False)
+    dataset_id = _record_dataset(project_id, f"{stem} (fixed).csv", path, "fixed", fixed)
+    doc["fix"] = {**result, "dataset_id": dataset_id, "file_name": f"{stem}-fixed.csv",
+                  "by": request.state.user["name"], "at": now_iso()}
+    with connect() as db:
+        db.execute("UPDATE runs SET report_json = ? WHERE id = ?", (json.dumps(doc), run_id))
+    return doc["fix"]
+
+
+@app.get("/api/projects/{project_id}/runs/{run_id}/fixed")
+def download_fixed(project_id: str, run_id: str) -> FileResponse:
+    path, name = _fixed_file(project_id, run_id)
+    return FileResponse(path, media_type="text/csv", filename=name)
+
+
+@app.post("/api/projects/{project_id}/runs/{run_id}/fixed/check")
+def check_fixed(project_id: str, run_id: str, request: Request) -> dict:
+    """Run a normal check on the repaired file, so it shows up in the history next to the original."""
+    path, name = _fixed_file(project_id, run_id)
+    return _run_check(_project(project_id), name, path, _load(path), False, request.state.user["name"])
 
 
 @app.put("/api/projects/{project_id}/runs/{run_id}/review")

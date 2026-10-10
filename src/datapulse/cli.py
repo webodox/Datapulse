@@ -294,6 +294,37 @@ def draft_rules_cmd(request: str = typer.Argument(..., help='What you want, in p
         typer.echo(f"# Not expressible as a rule: {item}")
 
 
+@app.command("fix")
+@guarded
+def fix_cmd(data_file: Path = typer.Argument(..., help="The data file that failed its checks."),
+            output: Path = typer.Option(..., "--output", "-o", help="Where to write the repaired copy (a NEW file)."),
+            config: Optional[Path] = CONFIG_OPT,
+            baseline: Optional[Path] = typer.Option(None, "--baseline", help="Baseline file (overrides config)."),
+            reference: Optional[Path] = typer.Option(None, "--reference", help="The known-good data file, so the "
+                                                                               "ML drift check is re-run too."),
+            force: bool = typer.Option(False, "--force", help="Allow overwriting an existing --output file.")):
+    """Let the AI repair agent fix a copy of a file, then re-check it (AI). Never changes the original."""
+    from .fix import RepairSession, run_repair
+    console = Console()
+    cfg = load_config(config)
+    if output.resolve() == data_file.resolve():
+        raise DataPulseError("--output must be a new file; the original is never overwritten.")
+    session = RepairSession(load_dataframe(data_file), load_baseline(baseline or Path(cfg.baseline)), cfg,
+                            reference=load_dataframe(reference) if reference else None)
+    with console.status("AI repair agent is working…"):
+        result = run_repair(session, on_step=lambda tool, args: console.print(
+            Text(f"  agent: {tool} {json.dumps(args) if args else ''}", style="dim")))
+    fixed = result.pop("fixed_frame")
+    _write_new(output, fixed.to_csv(index=False), cfg, force)
+    console.print(Text(f"\nIssues: {result['before']['total']} -> {result['after']['total']} "
+                       f"(rows {result['rows']['before']:,} -> {result['rows']['after']:,}). {result['summary']}", style="bold"))
+    for op in result["operations"]:
+        console.print(Text(f"  fixed: {op['effect']}  ({op['reason']})"))
+    for item in result["not_fixed"]:
+        console.print(Text(f"  left for a person: {item['issue']}: {item['why']}", style="yellow"))
+    console.print(Text(f"Repaired copy written to {output}. Review it before using it.", style="dim"))
+
+
 @app.command("github-outputs")
 @guarded
 def github_outputs_cmd(report_json: Path = typer.Argument(..., help="JSON report from `datapulse check --json`.")):

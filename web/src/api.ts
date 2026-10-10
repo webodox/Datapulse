@@ -14,6 +14,18 @@ export type Report = {
   status: 'passed' | 'failed'; issues: Issue[]; rows: { baseline: number; current: number }
   passed_checks: string[]; affected_consumers: string[]; schema_changed: boolean; data_file: string
   ai_note?: string | null; markdown?: string; triage?: Triage | null
+  charts?: Record<string, ColumnChart>; fix?: Fix | null
+}
+export type ColumnChart = {
+  null_rate: [number, number | null]
+  hist?: { edges: number[]; baseline: number[]; current: number[] }
+}
+type Counts = { total: number; critical: number; warning: number; info: number }
+export type Fix = {
+  summary: string; not_fixed: Array<{ issue: string; why: string }>; warnings: string[]
+  operations: Array<{ operation: string; args: Record<string, unknown>; reason: string; effect: string }>
+  before: Counts; after: Counts & { remaining: string[] }; rows: { before: number; after: number }
+  file_name: string; by?: string; at?: string
 }
 export type Triage = {
   headline: string; verdict: 'block' | 'investigate' | 'safe_to_ship'; verdict_reason: string
@@ -66,6 +78,9 @@ export const api = {
   users: () => request<User[]>('GET', '/api/users'),
   addUser: (u: { name: string; email: string; password: string; role: User['role'] }) => request<User>('POST', '/api/users', u),
   removeUser: (id: string) => request('DELETE', `/api/users/${id}`),
+  fix: (id: string, run: string) => request<Fix>('POST', `/api/projects/${id}/runs/${run}/fix`),
+  checkFixed: (id: string, run: string) => request<Report & { run_id: string }>('POST', `/api/projects/${id}/runs/${run}/fixed/check`),
+  fixedUrl: (id: string, run: string) => `${API}/api/projects/${id}/runs/${run}/fixed`,
   review: (id: string, run: string, status: ReviewStatus) => request<Review>('PUT', `/api/projects/${id}/runs/${run}/review`, { status }),
   health: () => request<{ version: string; ai: boolean }>('GET', '/api/health'),
   projects: () => request<Project[]>('GET', '/api/projects'),
