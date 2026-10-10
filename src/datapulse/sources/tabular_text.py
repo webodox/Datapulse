@@ -15,14 +15,13 @@ _PAGE = re.compile(r"^\[page \d+\]$")
 _DELIMITERS = (",", "\t", "|", ";")
 
 
-def pdf_frame(path, label: str) -> pd.DataFrame | None:
-    """The spreadsheet inside a PDF, or None when the PDF is prose, a scan, or a picture."""
-    from datapulse.unifier.documents import read_documents
+def document_frame(path, label: str) -> pd.DataFrame | None:
+    """The spreadsheet inside a PDF, Word, text or HTML file, or None when it is prose, a scan, or a picture."""
+    from datapulse.unifier.documents import full_text
 
-    docs, _skipped = read_documents([(Path(path), label)])
-    if len(docs) != 1:
-        return None
-    return table_from_text(docs[0].text, label)
+    # Not read_documents: its text cap is sized for an AI prompt and would cut the table's rows off.
+    text = full_text(Path(path), label)
+    return None if text is None else table_from_text(text, label)
 
 
 def table_from_text(text: str, label: str = "document") -> pd.DataFrame | None:

@@ -48,7 +48,7 @@ export type Destination = {
 export type DestinationForm = { name: string; url: string; table: string; mode: 'replace' | 'append' }
 export type SourceForm = { name: string; kind: string; settings: Record<string, string> }
 export type ColumnSide = { kind: string; null_rate: number | null; mean: number | null; min: number | null; max: number | null; top: string[]; samples?: string[] }
-export type ColumnIssue = { severity: Severity; title: string; detail: string }
+export type ColumnIssue = { check: string; severity: Severity; title: string; detail: string }
 export type ComparedColumn = {
   name: string; source: string | null; status: 'same' | 'renamed' | 'converted' | 'flagged' | 'missing'
   steps: Array<{ operation: string; effect: string }>; issues: ColumnIssue[]

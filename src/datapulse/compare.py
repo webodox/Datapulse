@@ -20,8 +20,8 @@ ROW_STEPS = ("remove_duplicates", "drop_rows_missing")
 SAMPLES = 3
 
 
-def compare_mapping(df: pd.DataFrame, baseline: Dict[str, Any], cfg: Config,
-                    recipe: List[Dict[str, Any]]) -> Dict[str, Any]:
+def compare_mapping(df: pd.DataFrame, baseline: Dict[str, Any], cfg: Config, recipe: List[Dict[str, Any]],
+                    reference: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     profile = baseline["profile"]
     lineage: Dict[str, Dict[str, Any]] = {c: {"source": c, "steps": []} for c in df.columns}
     dropped: List[Dict[str, Any]] = []
@@ -47,13 +47,13 @@ def compare_mapping(df: pd.DataFrame, baseline: Dict[str, Any], cfg: Config,
         elif args.get("column") in lineage:
             lineage[args["column"]]["steps"].append(step)
 
-    after = run_checks(baseline, mapped, cfg)
-    before = run_checks(baseline, df, cfg)
+    after = run_checks(baseline, mapped, cfg, reference=reference)
+    before = run_checks(baseline, df, cfg, reference=reference)
     by_column: Dict[str, List[Dict[str, str]]] = {}
     for issue in after.issues:
         for col in issue.columns:
-            by_column.setdefault(col, []).append({"severity": issue.severity, "title": issue.title,
-                                                  "detail": issue.detail})
+            by_column.setdefault(col, []).append({"check": issue.check, "severity": issue.severity,
+                                                  "title": issue.title, "detail": issue.detail})
     show = cfg.report.show_values
 
     columns = []
@@ -80,7 +80,7 @@ def compare_mapping(df: pd.DataFrame, baseline: Dict[str, Any], cfg: Config,
         "columns": columns, "extra": extra, "dropped": dropped, "table_steps": table_steps, "problems": problems,
         "rows": {"before": len(df), "after": len(mapped), "standard": profile["rows"]},
         "before": _counts(before.issues), "after": _counts(after.issues),
-        "table_issues": [{"severity": i.severity, "title": i.title, "detail": i.detail}
+        "table_issues": [{"check": i.check, "severity": i.severity, "title": i.title, "detail": i.detail}
                          for i in after.issues if not i.columns],
         "show_values": show,
     }

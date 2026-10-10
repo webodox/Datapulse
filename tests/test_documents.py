@@ -243,6 +243,40 @@ def test_a_pdf_of_the_orders_table_is_the_orders_table(tmp_path):
     assert not report.failed, [(i.severity, i.title) for i in report.issues]
 
 
+@pytest.mark.parametrize("ext", [".pdf", ".docx", ".txt", ".html"])
+def test_a_long_table_document_keeps_every_row(tmp_path, ext):
+    import pandas as pd
+
+    from datapulse.io import load_dataframe
+    from datapulse.sources.anyfile import frame_from_path
+    from datapulse.sources.pdfdoc import table_pdf
+    from datapulse.unifier.documents import MAX_TEXT_CHARS
+
+    orders = load_dataframe(Path(__file__).resolve().parents[1] / "examples" / "data" / "orders.csv")
+    long = pd.concat([orders] * 6, ignore_index=True)
+    assert len(long.to_csv(index=False)) > MAX_TEXT_CHARS
+    path = tmp_path / f"long{ext}"
+    cells = [list(long.columns)] + long.astype(str).values.tolist()
+    if ext == ".pdf":
+        path.write_bytes(table_pdf(long))
+    elif ext == ".docx":
+        docx = pytest.importorskip("docx")
+        doc = docx.Document()
+        table = doc.add_table(rows=len(cells), cols=len(long.columns))
+        for row, values in zip(table.rows, cells):
+            for cell, value in zip(row.cells, values):
+                cell.text = value
+        doc.save(path)
+    elif ext == ".txt":
+        path.write_text(long.to_csv(index=False))
+    else:
+        rows = "".join("<tr>" + "".join(f"<td>{v}</td>" for v in values) + "</tr>" for values in cells)
+        path.write_text(f"<html><head><title>Orders</title></head><body><table>{rows}</table></body></html>")
+    frame = frame_from_path(path, path.name)
+    assert len(frame) == len(long)
+    assert frame.astype(str).equals(long.astype(str))
+
+
 def test_documents_can_be_added_as_a_source(tmp_path):
     from datapulse.sources.anyfile import frame_from_bytes, frame_from_path
     from datapulse.sources.link import read_bytes

@@ -12,6 +12,11 @@ const countsOf = (run: Run): Record<Severity, number> => run.report.counts ?? {
   warning: run.report.issues.filter(i => i.severity === 'warning').length,
   info: run.report.issues.filter(i => i.severity === 'info').length,
 }
+const RULES: Record<string, string> = {
+  schema: 'columns & types', row_count: 'row count', null_rate: 'empty values', categorical: 'allowed values',
+  duplicates: 'duplicates', distribution: 'value ranges', ml_drift: 'learned drift',
+}
+const ruleName = (check: string) => RULES[check] ?? check.replace(/_/g, ' ')
 
 /** The most recent check of one source, from the project's recent runs. */
 export const lastCheckOf = (detail: ProjectDetail, source: Source) => detail.runs.find(r => r.report.source?.id === source.id)
@@ -240,7 +245,8 @@ function CompareRow({ c }: { c: ComparedColumn }) {
       {different && <small className="hl"><Icon name="alert" size={12} /> Values look different from the standard; no rule flags this</small>}
     </div>
     {c.issues.length > 0 && <ul className="cmp-issues">{c.issues.map((i, n) =>
-      <li key={n} className={i.severity} title={i.detail}><span className={`pill ${i.severity}`}>{i.severity}</span> {i.title}</li>)}</ul>}
+      <li key={n} className={i.severity} title={i.detail}><span className={`pill ${i.severity}`}>{i.severity}</span> {i.title}
+        <small className="muted">rule: {ruleName(i.check)}</small></li>)}</ul>}
   </div>
 }
 
@@ -289,7 +295,7 @@ export function MappingCompare({ projectId, source, operations }: { projectId: s
       </div>)}
     </div>
     {data.table_steps.map(s => <p key={s} className="note"><Icon name="info" size={13} /> {s}</p>)}
-    {data.table_issues.map((i, n) => <p key={n} className={`note ${i.severity === 'info' ? '' : 'warn'}`}><Icon name="alert" size={13} /> {i.title}: {i.detail}</p>)}
+    {data.table_issues.map((i, n) => <p key={n} className={`note ${i.severity === 'info' ? '' : 'warn'}`}><Icon name="alert" size={13} /> {i.title}: {i.detail} <small className="muted">(rule: {ruleName(i.check)})</small></p>)}
     {data.problems.map(p => <p key={p} className="note warn"><Icon name="alert" size={13} /> {p}</p>)}
     {!data.show_values && <p className="muted small"><Icon name="shield" size={13} /> Sample values are hidden by this project's rules (report.show_values).</p>}
   </section>

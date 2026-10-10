@@ -292,7 +292,7 @@ def compare_source(project_id: str, source_id: str, payload: Compare) -> dict:
         proposal = loads(row["proposal_json"])
         recipe = proposal["operations"] if proposal else loads(row["recipe_json"]) or []
     return compare_mapping(_fetch(row), json.loads(project["baseline_json"]), project_config(project["config_yaml"]),
-                           recipe)
+                           recipe, reference=dataset_rows(project["baseline_dataset_id"]))
 
 
 @router.delete("/projects/{project_id}/sources/{source_id}/proposal")

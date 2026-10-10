@@ -173,6 +173,24 @@ def _read_one(name: str, data: bytes, ext: str) -> List[Document]:
     raise DataPulseError(f"Unsupported document type '{ext}' for {name}")
 
 
+def full_text(path: Path, name: str) -> Optional[str]:
+    """All the text of one PDF, Word, text or HTML file, without the AI prompt cap. None for other kinds."""
+    path = Path(path)
+    ext = path.suffix.lower()
+    if ext not in (".pdf", ".docx", ".md", ".markdown", ".txt", ".html", ".htm"):
+        return None
+    if path.stat().st_size > MAX_TOTAL_BYTES:
+        raise DataPulseError(f"{name} is over the 25 MB limit for one upload or pull")
+    data = path.read_bytes()
+    if ext == ".pdf":
+        return _pdf(name, data).text
+    if ext == ".docx":
+        return _docx(name, data).text
+    if ext in (".html", ".htm"):
+        return html_to_text(_decode(data))[1]
+    return _decode(data)
+
+
 def read_documents(files: List[Tuple[Path, str]]) -> Tuple[List[Document], List[dict]]:
     """files: (path on disk, name the user knows). Returns (documents, skipped [{name, reason}])."""
     docs: List[Document] = []
