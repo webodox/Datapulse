@@ -17,7 +17,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from datapulse.errors import DataPulseError
-from datapulse.io import SUPPORTED, load_dataframe
+from datapulse.io import INPUTS, load_dataframe
 from datapulse.samples import write_samples
 from datapulse.sources import catalog, clean_settings, fetch_source, public_settings, try_connection, type_of
 from datapulse.unify import SOURCE_COLUMN, apply_recipe, combine, propose_mapping, validate_recipe
@@ -146,8 +146,8 @@ async def upload_source_file(project_id: str, file: UploadFile = File(...)) -> d
     """Store a file for a File source. Returns the id to save in the source's settings."""
     project_row(project_id)
     name = re.sub(r"[^\w.\- ]", "_", Path(file.filename or "data.csv").name).strip() or "data.csv"
-    if Path(name).suffix.lower() not in SUPPORTED:
-        raise HTTPException(415, "Supported files: CSV, JSON, JSONL/NDJSON and Parquet")
+    if Path(name).suffix.lower() not in INPUTS:
+        raise HTTPException(415, "Supported files: CSV, Excel, JSON, Parquet, PDF, Word, email, text, HTML, images, and zip")
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "The file is larger than 25 MB")

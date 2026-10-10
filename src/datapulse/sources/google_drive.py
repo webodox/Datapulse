@@ -10,6 +10,7 @@ import pandas as pd
 
 from datapulse.errors import DataPulseError
 from datapulse.sources.base import Field, Source, register
+from datapulse.io import INPUTS
 from datapulse.sources.file_link import SUPPORTED
 from datapulse.sources.google_sheets import GoogleSheetsSource, parse_sheet_url
 from datapulse.sources.http import fetch_bytes, require_str
@@ -83,7 +84,9 @@ class GoogleDriveSource:
 
         ext = _ext_from_disposition(headers.get("content-disposition", "")) or ".csv"
         # Prefer an extension the loader understands; fall back to .bin → reject.
-        if ext not in SUPPORTED:
+        if body.startswith(b"%PDF"):
+            ext = ".pdf"
+        if ext not in INPUTS:
             # Heuristic: JSON-looking content.
             sample = body.lstrip()[:1]
             if sample in (b"[", b"{"):
@@ -103,17 +106,17 @@ class GoogleDriveSource:
 @register
 class DriveFile(Source):
     kind, label, group = "google_drive", "Google Drive", "Files & links"
-    description = "A CSV, JSON, Parquet or Excel file shared as 'Anyone with the link can view'."
+    description = "A spreadsheet or document (CSV, Excel, JSON, PDF, Word, email, text) shared as 'Anyone with the link can view'."
     requires = ("httpx",)
     fields = (Field("url", "Share link", "https://drive.google.com/file/d/…/view"),)
 
     def _table(self, settings) -> pd.DataFrame:
         import tempfile
 
-        from datapulse.io import load_dataframe
+        from .anyfile import frame_from_path
 
         path = GoogleDriveSource().fetch({"url": settings["url"]}, {}, Path(tempfile.mkdtemp()))
-        return load_dataframe(path)
+        return frame_from_path(path, path.name)
 
     def test(self, settings):
         df = self._table(settings)

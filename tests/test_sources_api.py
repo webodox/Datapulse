@@ -27,6 +27,23 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
+def test_file_source_accepts_a_pdf(client):
+    from test_documents import make_pdf
+
+    pid = client.post("/api/projects", json={"name": "Docs"}).json()["id"]
+    uploaded = client.post(
+        f"/api/projects/{pid}/sources/files",
+        files={"file": ("invoice.pdf", make_pdf("Invoice 42 total 99.50"), "application/pdf")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    tested = client.post(
+        f"/api/projects/{pid}/sources/test",
+        json={"kind": "file", "settings": {"file": uploaded.json()["file"]}},
+    ).json()
+    assert tested["ok"], tested
+    assert "1 row" in tested["message"]
+
+
 def test_add_source_form_fills_with_test_data_and_connects(client):
     pid = client.post("/api/projects", json={"name": "Try"}).json()["id"]
     catalog = {k["kind"]: k for k in client.get("/api/sources/catalog").json()}

@@ -247,7 +247,7 @@ function SourceDialog({ projectId, kinds, source, close, saved }:
       {plugin.fields.map(f => <label key={f.name}>{f.label}{!f.required && <small className="muted"> optional</small>}
         {f.input === 'file'
           ? <span className="file-pick">
-            <input type="file" accept=".csv,.json,.jsonl,.ndjson,.parquet,.pq" disabled={!!busy}
+            <input type="file" accept=".csv,.json,.jsonl,.ndjson,.parquet,.pq,.xlsx,.xls,.pdf,.docx,.txt,.md,.eml,.html,.htm,.png,.jpg,.jpeg,.webp,.gif,.zip" disabled={!!busy}
               onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) upload(f.name, file) }} />
             <small className="muted">{busy === 'upload' ? 'Uploading…' : values[f.name] ? `Uploaded: ${values[f.name].split('/').pop()}` : f.placeholder}</small>
           </span>

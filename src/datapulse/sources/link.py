@@ -9,14 +9,19 @@ import ipaddress
 import re
 import socket
 import urllib.request
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pandas as pd
 
+from datapulse.io import ARCHIVES, DOCUMENTS
+
+from .anyfile import frame_from_bytes
 from .base import Field, Source, SourceError, register
 
 MAX_BYTES = 50 * 1024 * 1024
 SHEET = re.compile(r"https://docs\.google\.com/spreadsheets/d/([\w-]+)(?:/[^#?]*)?(?:[?#].*?gid=(\d+))?")
+DOC = re.compile(r"https://docs\.google\.com/document/d/([\w-]+)")
 
 
 def download_url(url: str) -> str:
@@ -24,6 +29,9 @@ def download_url(url: str) -> str:
     m = SHEET.match(url)
     if m:
         return f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=csv&gid={m.group(2) or 0}"
+    m = DOC.match(url)
+    if m:
+        return f"https://docs.google.com/document/d/{m.group(1)}/export?format=docx"
     return url
 
 
@@ -48,7 +56,38 @@ class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+# Types that are documents even when the URL has no file extension (a Google Doc export, a PDF download).
+# text/plain and text/html are left out: a CSV is often served as plain text, and an HTML body is usually a login page.
+_DOC_TYPES = {
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "message/rfc822": ".eml",
+    "text/markdown": ".md",
+    "application/zip": ".zip",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+
+
+def _document_name(url: str, content_type: str, data: bytes) -> str | None:
+    """A file name when these bytes are a document rather than a table. None for tables and login pages."""
+    suffix = Path(urlsplit(url).path).suffix.lower()
+    if suffix in DOCUMENTS or suffix in ARCHIVES:
+        return Path(urlsplit(url).path).name
+    ctype = content_type.split(";")[0].strip().lower()
+    if ctype in _DOC_TYPES:
+        return "download" + _DOC_TYPES[ctype]
+    if data.startswith(b"%PDF"):
+        return "download.pdf"
+    return None
+
+
 def read_bytes(data: bytes, url: str, content_type: str) -> pd.DataFrame:
+    document = _document_name(url, content_type, data)
+    if document:
+        return frame_from_bytes(data, document)
     path = urlsplit(url).path.lower()
     if path.endswith((".parquet", ".pq")) or data[:4] == b"PAR1":
         return pd.read_parquet(io.BytesIO(data))
@@ -65,7 +104,8 @@ def read_bytes(data: bytes, url: str, content_type: str) -> pd.DataFrame:
 @register
 class Link(Source):
     kind, label, group = "link", "Link", "Files & links"
-    description = "A CSV, JSON or Parquet file at a public link: Google Sheets, open-data portals, cloud storage."
+    description = ("A public file: CSV, JSON, Parquet, Excel, PDF, Word, email, or a Google Sheet or Google Doc "
+                   "shared as 'Anyone with the link'.")
     has_sample = True
     fields = (Field("url", "Link", "https://docs.google.com/spreadsheets/d/…  or  https://example.com/orders.csv"),)
 

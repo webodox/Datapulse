@@ -216,6 +216,32 @@ def test_without_a_key_each_document_becomes_one_record(tmp_path):
     assert out.rows[0]["word_count"] == 6 and "No AI key" in out.stats["note"]
 
 
+def test_documents_can_be_added_as_a_source(tmp_path):
+    from datapulse.sources.anyfile import frame_from_bytes, frame_from_path
+    from datapulse.sources.link import read_bytes
+
+    pdf = tmp_path / "invoice.pdf"
+    pdf.write_bytes(make_pdf("Invoice 42 total 99.50"))
+    frame = frame_from_path(pdf)
+    assert len(frame) == 1 and "Invoice 42 total 99.50" in frame.loc[0, "text"]
+
+    docx = tmp_path / "sow.docx"
+    docx.write_bytes(make_docx())
+    frame = frame_from_path(docx)
+    assert "Acme Corp" in frame.loc[0, "text"] and frame.loc[0, "_document"] == "sow.docx"
+
+    eml = tmp_path / "mail.eml"
+    eml.write_bytes(make_eml())
+    frame = frame_from_path(eml)
+    assert "Invoice INV-7" in set(frame["title"]) or "Invoice INV-7" in " ".join(frame["text"])
+    assert any("inv-7.pdf" in name for name in frame["_document"])
+
+    linked = read_bytes(make_pdf("Hello from a link"), "https://cdn.example.com/note.pdf", "application/pdf")
+    assert "Hello from a link" in linked.loc[0, "text"]
+    linked = frame_from_bytes(make_docx(), "brief.docx")
+    assert "Acme Corp" in linked.loc[0, "text"]
+
+
 def test_web_page_source_saves_html(tmp_path, monkeypatch):
     httpx = pytest.importorskip("httpx")
     from datapulse.sources import http as http_mod
