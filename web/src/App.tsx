@@ -92,8 +92,9 @@ function Offline({ retry }: { retry: () => void }) {
   return <div className="center-card">
     <span className="empty-icon bad"><Icon name="plug" size={22} /></span>
     <h1>Can't reach the DataPulse API</h1>
-    <p>Start the server, then try again:</p>
-    <pre className="inline-code">uvicorn server.app:app --port 8000</pre>
+    <p>In the project folder (not <code>web</code>), start the server in its own terminal, then try again:</p>
+    <pre className="inline-code">python -m uvicorn server.app:app --port 8000</pre>
+    <p className="muted">It's running when that terminal shows <code>Uvicorn running on http://127.0.0.1:8000</code>.</p>
     <button className="button primary" onClick={retry}>Try again</button>
   </div>
 }
