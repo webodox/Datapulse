@@ -16,6 +16,8 @@ likely causes, writes the fix checklist and drafts the message to the people aff
 |---|---|---|---|
 | ML drift model (`ml_drift` check) | Spotting subtle or multi-column drift and pointing at the columns responsible | Dashboard (automatic), `check --reference good.csv` | nothing; runs locally |
 | AI triage agent | The first hour of an incident: root cause, block-or-ship call, fix steps, who to tell, the message | Dashboard **Triage with AI**, `check --triage` | `ANTHROPIC_API_KEY` |
+| AI repair agent | The fix itself: rescales units, converts text back to numbers, removes duplicates, standardizes spellings; then re-runs every check to prove it worked | Dashboard **Fix with AI** (download the repaired copy), `datapulse fix data.csv -o fixed.csv` | `ANTHROPIC_API_KEY` |
+| Before/after charts | Seeing a shift instantly: each column's value ranges and empty rates, baseline vs. new file | Dashboard, on each issue | nothing |
 | Rules assistant | Writing and debugging YAML; drafts are validated and self-corrected before you see them | Dashboard Rules tab, `datapulse draft-rules "..."` | `ANTHROPIC_API_KEY` |
 | Issue explanations | A hedged hypothesis per issue | `check --ai`, dashboard toggle | `ANTHROPIC_API_KEY` |
 
@@ -31,6 +33,13 @@ current aggregates), `get_run_history` and `get_consumers`. It decides what to l
 triage (verdict `block` / `investigate` / `safe_to_ship`, ranked hypotheses with confidence and evidence, actions
 with owners, who to notify, a ready-to-send message). The dashboard shows the steps it took. Its output is labelled
 AI-generated and never changes a check's pass/fail result.
+
+**How the repair agent works.** It can only use a fixed set of safe repair operations (rename, rescale, convert to
+numbers, remove duplicates, fill or drop empty values, drop a column, standardize spellings), never arbitrary code.
+It applies them one at a time to a copy and re-checks after each, and it is told not to invent data (a missing
+column or blank identifiers are left for a person). Its operations are logged and replayed onto the original to
+produce the repaired file, then every check runs again, so "9 issues -> 5" is measured. The original is never
+changed.
 
 **Privacy.** Every AI feature sends column names, aggregate statistics and issue metrics only. Raw rows, category
 values and example values are never sent; tests enforce this for each feature. The ML model never leaves your machine.
@@ -246,6 +255,7 @@ Re-running `datapulse baseline` after an intentional data change bumps `baseline
 | `datapulse baseline <file> [-c CONFIG] [-o PATH]` | Profile a known-good file into a versioned baseline JSON. |
 | `datapulse check <file> [-c CONFIG] [--baseline PATH] [--baseline-ref REF] [--config-ref REF] [--markdown PATH] [--json PATH] [--discover] [--scan-root DIR] [--reference FILE] [--triage] [--ai]` | Run all checks. `--reference` (the known-good data file) adds the ML drift check; `--triage` runs the AI agent on failures. |
 | `datapulse scan <file> [--root DIR] [--scope readers\|all] [--exclude DIR] [-o FILE]` | Recognize languages in a repo and find code that reads the data file. |
+| `datapulse fix <file> -o FILE [--reference FILE]` | AI repair agent: writes a repaired copy to a **new** file and re-checks it. |
 | `datapulse draft-rules "<request>" [--data FILE] [-o FILE]` | Plain-English request -> complete, validated `datapulse.yml` (AI). Prints it or writes a **new** file. |
 | `datapulse suggest <file> [-o FILE] [--force] [--ai]` | Propose rules from the profile. Prints YAML or writes a **new** file; refuses to touch your config. |
 | `datapulse github-outputs <report.json>` | Print `status`, `issue-count`, `schema-changed`, `affected-consumers` as `key=value` lines for `$GITHUB_OUTPUT` (values are sanitized). |

@@ -12,6 +12,7 @@
   --crit: #d03b3b; --crit-text: #b0302c; --crit-soft: #fcebea;
   --info: #3f7fb0; --info-text: #2f6890; --info-soft: #e7f0f7;
   --ai: #7c63b5; --ai-soft: #f3effa;
+  --series-base: #2a78d6; --series-new: #eb6834;  /* validated pair: CVD + contrast on --surface */
   --code-bg: #15211c; --code-ink: #dbe8df;
   --shadow: 0 1px 2px #1a2e2408, 0 2px 8px #1a2e2408;
   --radius: 12px;
@@ -29,6 +30,7 @@
   --crit: #e5534b; --crit-text: #ff8f86; --crit-soft: #3a1b19;
   --info: #5b9fd1; --info-text: #8cc0e8; --info-soft: #172a38;
   --ai: #b39ae6; --ai-soft: #251f36;
+  --series-base: #3987e5; --series-new: #d95926;
   --code-bg: #0a100d; --code-ink: #d4e3d9;
   --shadow: 0 1px 2px #0005;
 }
@@ -217,6 +219,7 @@ dt { color: var(--muted) } dd { margin: 0; font-family: var(--mono); font-size: 
 .causes li { display: flex; gap: 10px; align-items: flex-start }
 .causes div { display: grid } .causes small { color: var(--muted) }
 .conf { font: 600 11px var(--mono); text-transform: uppercase; padding: 2px 7px; border-radius: 6px; flex: none; margin-top: 2px; background: var(--surface-3); color: var(--muted) }
+.conf.done { background: var(--good-soft); color: var(--good-text) }
 .conf.high { background: var(--crit-soft); color: var(--crit-text) } .conf.medium { background: var(--warn-soft); color: var(--warn-text) }
 .checklist label { display: flex; gap: 8px; align-items: baseline; cursor: pointer }
 .checklist input { accent-color: var(--accent) }
@@ -285,6 +288,39 @@ tr:last-child td { border-bottom: 0 }
 .toast span { flex: 1; overflow-wrap: anywhere }
 .toast.error { border-left-color: var(--crit) }
 .toast.error > .icon { color: var(--crit-text) }
+
+/* ---------- before/after charts + repair ---------- */
+.chart { margin: 4px 0 0; display: grid; gap: 6px; min-width: 0 }
+.chart figcaption { color: var(--muted); font-size: 13px }
+.chart-legend { display: flex; gap: 14px; font-size: 13px; color: var(--ink-2) }
+.chart-legend span, .chart-tip span { display: inline-flex; align-items: center; gap: 6px }
+.sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block }
+.sw.base, .bar.base, .hbar i.base { background: var(--series-base); fill: var(--series-base) }
+.sw.new, .bar.new, .hbar i.new { background: var(--series-new); fill: var(--series-new) }
+.chart-plot { position: relative; overflow-x: auto }
+.chart-plot svg { display: block; width: 100%; height: auto; min-width: 360px }
+.chart .grid { stroke: var(--border); stroke-dasharray: 2 4 }
+.chart .axis { stroke: var(--border-strong) }
+.chart .tick { fill: var(--muted); font: 11px var(--mono) }
+.chart .direct { fill: var(--ink); font: 600 12px var(--font) }
+.chart .hit { fill: transparent }
+.chart g.dim .bar { opacity: .35 }
+.chart-tip { position: absolute; top: 0; transform: translateX(-50%); background: var(--ink); color: var(--bg); border-radius: 8px; padding: 7px 10px; display: grid; gap: 2px; font-size: 12.5px; pointer-events: none; white-space: nowrap; box-shadow: 0 8px 24px #0003 }
+.hbars { display: grid; gap: 6px; max-width: 460px }
+.hbar { display: grid; grid-template-columns: 72px 1fr 64px; align-items: center; gap: 10px; font-size: 13.5px }
+.hbar .track { height: 10px }
+.hbar i { display: block; height: 100%; border-radius: 0 4px 4px 0 }
+.hbar b { font: 500 13px var(--mono); text-align: right }
+.fix { border-color: color-mix(in srgb, var(--good) 35%, var(--border)); background: linear-gradient(180deg, var(--good-soft), var(--surface) 120px) }
+.fix-cta { background: var(--good-soft) }
+.fix-cta .triage-icon { color: var(--good-text) }
+.fix-cta .button.primary { background: var(--accent) }
+.fix-score { display: flex; gap: 28px; flex-wrap: wrap }
+.fix-score div { display: grid }
+.fix-score small { color: var(--muted) }
+.fix-score b { font-size: 22px; font-variant-numeric: tabular-nums }
+.fix-score b span { color: var(--muted); font-weight: 400 }
+a.button { text-decoration: none }
 
 /* ---------- accounts + shared review ---------- */
 .loading.center { justify-content: center; min-height: 100vh }
