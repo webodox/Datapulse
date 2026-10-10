@@ -1,0 +1,182 @@
+name: "DataPulse data quality check"
+description: "Language-agnostic data checks for any repository: compare a changed CSV/Parquet file with the baseline from the target branch, comment on the pull request, and fail CI on critical violations."
+author: "DataPulse"
+branding:
+  icon: activity
+  color: blue
+
+inputs:
+  data-file:
+    description: "Path to the CSV or Parquet file to check (relative to working-directory)."
+    required: true
+  config:
+    description: "Path to datapulse.yml (relative to working-directory)."
+    required: false
+    default: "datapulse.yml"
+  baseline:
+    description: "Baseline file path. Defaults to the `baseline` setting in the config."
+    required: false
+    default: ""
+  baseline-ref:
+    description: "Git ref to read the baseline from. Defaults to origin/<base branch> on pull requests."
+    required: false
+    default: ""
+  working-directory:
+    description: "Directory to run in, e.g. a service folder in a monorepo. Your project's language and files are irrelevant."
+    required: false
+    default: "."
+  setup-python:
+    description: "Install Python via actions/setup-python (true) or use the runner's existing python3 (false). DataPulse always installs into its own virtualenv and never touches your project's dependencies."
+    required: false
+    default: "true"
+  binary-url:
+    description: "URL of a standalone DataPulse executable (from the project's Releases). When set, Python is not installed or used at all."
+    required: false
+    default: ""
+  binary-sha256:
+    description: "Expected SHA-256 of the binary. The step fails on mismatch; strongly recommended with binary-url."
+    required: false
+    default: ""
+  python-version:
+    description: "Python version used to run DataPulse when setup-python is true."
+    required: false
+    default: "3.11"
+  comment:
+    description: "Post or update a pull request comment with the report (true/false)."
+    required: false
+    default: "true"
+  discover:
+    description: "Find code (Python, JS/TS, Java, Go, Rust, SQL, ...) that references the affected columns and show it in the report (true/false). Heuristic text search."
+    required: false
+    default: "false"
+  config-from-base:
+    description: "On pull requests, also read datapulse.yml from the target branch (true/false) so a PR cannot loosen its own rules. Rule changes in a PR take effect after it merges."
+    required: false
+    default: "true"
+  ai:
+    description: "Add AI explanations (true/false). Needs an API key in the step's env; only aggregate statistics are sent."
+    required: false
+    default: "false"
+  github-token:
+    description: "Token used to post the PR comment. Needs pull-requests: write."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: "0 when the check passed, 1 when issues reached the configured fail_on severity."
+    value: ${{ steps.check.outputs.exit-code }}
+  status:
+    description: "passed, failed, or error (the check could not run, e.g. missing baseline)."
+    value: ${{ steps.check.outputs.status }}
+  issue-count:
+    description: "Number of issues found."
+    value: ${{ steps.check.outputs.issue-count }}
+  schema-changed:
+    description: "true when columns were added, removed, or changed type."
+    value: ${{ steps.check.outputs.schema-changed }}
+  affected-consumers:
+    description: "Comma-separated downstream consumers mapped to issues."
+    value: ${{ steps.check.outputs.affected-consumers }}
+  report-markdown:
+    description: "Path to the Markdown report on the runner."
+    value: ${{ steps.check.outputs.report-markdown }}
+  report-json:
+    description: "Path to the machine-readable JSON report on the runner."
+    value: ${{ steps.check.outputs.report-json }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      if: inputs.setup-python == 'true' && inputs.binary-url == ''
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install DataPulse
+      shell: bash
+      env:
+        DP_ACTION_PATH: ${{ github.action_path }}
+        DP_BINARY_URL: ${{ inputs.binary-url }}
+        DP_BINARY_SHA256: ${{ inputs.binary-sha256 }}
+      run: |
+        set -eu
+        if [ -n "$DP_BINARY_URL" ]; then
+          dir="$RUNNER_TEMP/datapulse-bin"; mkdir -p "$dir"
+          name=datapulse; if [ "${RUNNER_OS:-}" = "Windows" ]; then name=datapulse.exe; fi
+          curl --fail --silent --show-error --location "$DP_BINARY_URL" --output "$dir/$name"
+          if [ -n "$DP_BINARY_SHA256" ]; then
+            if command -v sha256sum >/dev/null 2>&1; then actual="$(sha256sum "$dir/$name" | cut -d' ' -f1)"; else actual="$(shasum -a 256 "$dir/$name" | cut -d' ' -f1)"; fi
+            if [ "$actual" != "$DP_BINARY_SHA256" ]; then echo "SHA-256 mismatch for the downloaded DataPulse binary." >&2; exit 1; fi
+          fi
+          chmod +x "$dir/$name"
+          echo "$dir" >> "$GITHUB_PATH"
+          exit 0
+        fi
+        py="$(command -v python || command -v python3)"
+        "$py" -m venv "$RUNNER_TEMP/datapulse-venv"
+        if [ -d "$RUNNER_TEMP/datapulse-venv/Scripts" ]; then bin="$RUNNER_TEMP/datapulse-venv/Scripts"; else bin="$RUNNER_TEMP/datapulse-venv/bin"; fi
+        "$bin/python" -m pip install --quiet --disable-pip-version-check "$DP_ACTION_PATH"
+        echo "$bin" >> "$GITHUB_PATH"
+
+    - name: Run DataPulse checks
+      id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        DP_DATA_FILE: ${{ inputs.data-file }}
+        DP_CONFIG: ${{ inputs.config }}
+        DP_BASELINE: ${{ inputs.baseline }}
+        DP_BASELINE_REF: ${{ inputs.baseline-ref }}
+        DP_AI: ${{ inputs.ai }}
+        DP_DISCOVER: ${{ inputs.discover }}
+        DP_CONFIG_FROM_BASE: ${{ inputs.config-from-base }}
+        DP_BASE_REF: ${{ github.base_ref }}
+      run: |
+        set +e
+        md="$RUNNER_TEMP/datapulse-report.md"
+        js="$RUNNER_TEMP/datapulse-report.json"
+        rm -f "$md" "$js"   # never publish a stale report from an earlier step
+        args=("$DP_DATA_FILE" --markdown "$md" --json "$js")
+        if [ -n "$DP_BASELINE" ]; then args+=(--baseline "$DP_BASELINE"); fi
+        ref="$DP_BASELINE_REF"
+        if [ -z "$ref" ] && [ -n "$DP_BASE_REF" ]; then
+          git fetch --no-tags --depth=1 origin "$DP_BASE_REF"
+          ref="origin/$DP_BASE_REF"
+        fi
+        if [ -n "$ref" ]; then
+          args+=(--baseline-ref "$ref")
+          # Always read the rules from the trusted ref, even if the PR deleted or moved its config file.
+          if [ "$DP_CONFIG_FROM_BASE" = "true" ]; then args+=(--config "$DP_CONFIG" --config-ref "$ref")
+          elif [ -f "$DP_CONFIG" ]; then args+=(--config "$DP_CONFIG"); fi
+        elif [ -f "$DP_CONFIG" ]; then
+          args+=(--config "$DP_CONFIG")
+        fi
+        if [ "$DP_AI" = "true" ]; then args+=(--ai); fi
+        if [ "$DP_DISCOVER" = "true" ]; then args+=(--discover); fi
+        datapulse check "${args[@]}"
+        code=$?
+        {
+          echo "exit-code=$code"
+          echo "report-markdown=$md"
+          echo "report-json=$js"
+        } >> "$GITHUB_OUTPUT"
+        if [ -f "$js" ]; then datapulse github-outputs "$js" >> "$GITHUB_OUTPUT"; else echo "status=error" >> "$GITHUB_OUTPUT"; fi
+        exit 0
+
+    - name: Publish pull request comment
+      if: always() && inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: datapulse comment "$RUNNER_TEMP/datapulse-report.md"
+
+    - name: Fail on violations
+      if: always() && steps.check.outputs.exit-code != '' && steps.check.outputs.exit-code != '0'
+      shell: bash
+      env:
+        DP_EXIT: ${{ steps.check.outputs.exit-code }}
+      run: |
+        echo "DataPulse found issues at or above the configured fail_on severity (exit code $DP_EXIT)."
+        exit "$DP_EXIT"

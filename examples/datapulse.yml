@@ -1,0 +1,52 @@
+# Sample DataPulse configuration for examples/data/orders.csv
+version: 1
+baseline: .datapulse/baseline.json
+fail_on: critical
+
+checks:
+  schema:
+    missing_columns: critical
+    added_columns: warning
+    type_changes: critical
+  row_count:
+    severity: warning
+    max_change_pct: 15
+  null_rate:
+    severity: critical
+    max_increase: 0.02
+    columns:
+      customer_id: 0.0
+  categorical:
+    severity: warning
+    max_unexpected_rate: 0.0
+    columns: [status, country]
+  duplicates:
+    severity: critical
+    columns: [order_id]
+  distribution:
+    severity: warning
+    psi_threshold: 0.2
+    max_mean_shift_std: 1.0
+
+consumers:
+  revenue_dashboard:
+    type: dashboard
+    owner: finance-analytics
+    description: Daily revenue by country
+    columns: [amount, created_at, country, status]
+  churn_model:
+    type: model
+    owner: data-science
+    columns: [customer_id, amount, quantity, created_at]
+  fulfillment_service:
+    type: service
+    owner: logistics
+    columns: [order_id, status, quantity]
+
+report:
+  markdown: datapulse-report.md
+  max_examples: 5
+  show_values: true
+
+ai:
+  enabled: false

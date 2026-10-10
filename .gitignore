@@ -1,0 +1,15 @@
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.venv/
+build/
+dist/
+datapulse-report.md
+dist/
+*.spec
+.datapulse/datapulse.sqlite3
+.datapulse/uploads/
+web/node_modules/
+web/dist/
+.env
+*.tsbuildinfo

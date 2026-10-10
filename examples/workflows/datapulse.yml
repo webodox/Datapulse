@@ -1,0 +1,28 @@
+# Copy to .github/workflows/datapulse.yml in your repository.
+name: DataPulse
+
+on:
+  pull_request:
+    paths:
+      - "data/**"
+      - "datapulse.yml"
+      - ".datapulse/**"
+
+permissions:
+  contents: read
+  pull-requests: write   # lets the action post/update its PR comment
+
+jobs:
+  data-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: your-org/datapulse@v1     # replace with the repository that hosts this action
+        with:
+          data-file: data/orders.csv
+          config: datapulse.yml
+          # comment: "true"
+          # ai: "true"                  # optional; also set the env block below
+        # env:
+        #   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

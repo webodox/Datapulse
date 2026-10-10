@@ -1,0 +1,13 @@
+# Any CI system (GitLab, Jenkins, CircleCI...) can run the container instead of the Action.
+# Build the image once from this repository, then:
+name: DataPulse via Docker
+on: [pull_request]
+jobs:
+  data-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: |
+          docker run --rm -v "$PWD":/work your-registry/datapulse:latest \
+            check data/orders.csv --baseline-ref origin/main --json datapulse.json
