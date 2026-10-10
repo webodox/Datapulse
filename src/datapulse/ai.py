@@ -58,7 +58,9 @@ RULES_SCHEMA = {
 
 
 def get_api_key(cfg: Config) -> Optional[str]:
-    return os.environ.get(cfg.ai.api_key_env) or None
+    # Keys pasted into a host's settings often pick up a trailing space or newline, which makes every request
+    # fail as an illegal header ("Connection error"). Trim it.
+    return (os.environ.get(cfg.ai.api_key_env) or "").strip() or None
 
 
 def get_client(cfg: Config):
@@ -92,7 +94,8 @@ def create(client, cfg: Config, **params):
     except anthropic.APIStatusError as e:
         raise DataPulseError(f"AI request failed with HTTP {e.status_code}: {e.message}")
     except anthropic.APIConnectionError as e:
-        raise DataPulseError(f"Could not reach the AI service: {e}")
+        cause = f" ({e.__cause__})" if e.__cause__ else ""
+        raise DataPulseError(f"Could not reach the AI service: {e}{cause}")
     if response.stop_reason == "refusal":
         raise DataPulseError("The AI declined this request.")
     if response.stop_reason == "max_tokens":
