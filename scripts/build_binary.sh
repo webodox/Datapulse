@@ -7,6 +7,8 @@ python -m PyInstaller --noconfirm --clean --onefile --name datapulse \
   --paths src \
   --collect-all pyarrow \
   --collect-submodules pandas \
+  --collect-submodules sklearn --collect-data sklearn \
+  --collect-submodules anthropic \
   --exclude-module tkinter --exclude-module matplotlib --exclude-module IPython --exclude-module pytest \
   packaging/entry.py
 echo "Built: $(ls dist/datapulse*)"

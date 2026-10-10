@@ -1,9 +1,43 @@
 # DataPulse
 
-Catch data changes that would break downstream dashboards, services, or ML pipelines. DataPulse profiles a
-known-good CSV, Parquet or JSON file, then checks every new version against that baseline, locally or on each pull request.
+An AI data-quality engineer for your pipelines. DataPulse catches data changes that would break dashboards,
+services or ML models, then does the on-call work: it investigates, says whether to block the release, ranks the
+likely causes, writes the fix checklist and drafts the message to the people affected.
 
-Core checks run fully offline with deterministic output. An AI explanation layer is optional.
+- **Rules** (schema, nulls, row counts, duplicates, categories, distributions) run offline and deterministically.
+- **An ML drift model** learns to tell new rows from trusted rows and names the columns that changed, including
+  shifts in how columns relate to each other that no single-column rule can see. Runs locally, no API key.
+- **An AI triage agent** (Claude, with tools) investigates each failure and writes the incident note.
+- **A rules assistant** turns "order_id must be unique and alert if amount shifts" into a validated `datapulse.yml`.
+
+## AI and ML features
+
+| Feature | What it takes off your plate | Where | Needs |
+|---|---|---|---|
+| ML drift model (`ml_drift` check) | Spotting subtle or multi-column drift and pointing at the columns responsible | Dashboard (automatic), `check --reference good.csv` | nothing; runs locally |
+| AI triage agent | The first hour of an incident: root cause, block-or-ship call, fix steps, who to tell, the message | Dashboard **Triage with AI**, `check --triage` | `ANTHROPIC_API_KEY` |
+| Rules assistant | Writing and debugging YAML; drafts are validated and self-corrected before you see them | Dashboard Rules tab, `datapulse draft-rules "..."` | `ANTHROPIC_API_KEY` |
+| Issue explanations | A hedged hypothesis per issue | `check --ai`, dashboard toggle | `ANTHROPIC_API_KEY` |
+
+**How the drift model works.** It samples up to `max_rows` rows from each file and trains a random forest to
+predict which file a row came from. Its out-of-bag ROC AUC is the drift score: 0.5 means the files are
+indistinguishable, 1.0 means completely different. Above `max_auc` (default 0.7) it reports an issue naming the
+columns the model relied on (feature importance), and those columns map to your downstream consumers like any
+other issue. Identifier columns (all-unique values) and timestamps are skipped automatically, because they differ
+between any two batches; add more to `checks.ml_drift.exclude`.
+
+**How the triage agent works.** Claude gets read-only tools: `list_issues`, `get_column_stats` (baseline vs.
+current aggregates), `get_run_history` and `get_consumers`. It decides what to look at, then returns a strict JSON
+triage (verdict `block` / `investigate` / `safe_to_ship`, ranked hypotheses with confidence and evidence, actions
+with owners, who to notify, a ready-to-send message). The dashboard shows the steps it took. Its output is labelled
+AI-generated and never changes a check's pass/fail result.
+
+**Privacy.** Every AI feature sends column names, aggregate statistics and issue metrics only. Raw rows, category
+values and example values are never sent; tests enforce this for each feature. The ML model never leaves your machine.
+
+**Setting the key.** CLI: `export ANTHROPIC_API_KEY=...` (PowerShell: `$env:ANTHROPIC_API_KEY="..."`). Docker:
+copy `.env.example` to `.env`, put your key in it, then `docker compose up --build`. The model is `ai.model` in
+`datapulse.yml` (default `claude-sonnet-5-5`); `DATAPULSE_AI_URL` points the client at a proxy.
 
 ## Recognizing projects in any language
 
@@ -49,7 +83,7 @@ validated exactly like the CLI's, and each run returns the same JSON report as `
 docker compose up --build        # dashboard: http://localhost:8080   API docs: http://localhost:8000/docs
 ```
 
-Without Docker (Python 3.9+, Node.js 20+):
+Without Docker (Python 3.10+, Node.js 20+):
 
 ```bash
 pip install -e ".[web]"
@@ -57,10 +91,7 @@ uvicorn server.app:app --reload --port 8000
 cd web && npm install && npm run dev    # http://localhost:5173 (proxies /api to port 8000)
 ```
 
-In the dashboard: create a project (or **Load sample workspace**), upload a known-good file as the baseline,
-then upload new batches to check them. **Edit rules** opens the project's `datapulse.yml`; **Suggest rules from
-baseline** shows `datapulse suggest` output to copy from (nothing is applied). Uploads accept CSV, JSON
-(an array of row objects), JSONL/NDJSON and Parquet, up to 25 MB.
+In the dashboard: create a project (or **Try it with sample data**), drop a known-good file to save the baseline, then drop each new version to check it; the check starts as soon as the file lands. Each project has four tabs: **Checks** (results and history), **Baseline** (column profile, replace it), **Rules** (the project's `datapulse.yml`, plus `datapulse suggest` output to copy from; nothing is applied) and **Send data** (the ingest API). Uploads accept CSV, JSON (an array of row objects), JSONL/NDJSON and Parquet, up to 25 MB.
 
 **Sending data from any language.** Creating a project returns an API key once (only its hash is stored).
 Any service that can make an HTTP request can send rows:
@@ -92,7 +123,7 @@ dependency tree. Choose how to run it:
 | **Any machine or CI, no Python** | download `datapulse-<os>-<arch>` from Releases | nothing |
 | **Any CI or laptop** | Docker image: `docker run --rm -v "$PWD":/work datapulse check data.csv` | Docker |
 | **Developers who just want the CLI** | `pipx install .` or `uvx --from . datapulse ...` | pipx or uv |
-| **A Python project** | `pip install -e ".[dev]"` | Python 3.9+ |
+| **A Python project** | `pip install -e ".[dev]"` | Python 3.10+ |
 | **A team that wants a dashboard / REST API** | `docker compose up --build` (see "Web dashboard and REST API") | Docker |
 
 Scripts in any language can read results from the exit code (`0` / `1` / `2`) or from the JSON report
@@ -105,8 +136,8 @@ Examples for other stacks are in `examples/workflows/`: `node.yml`, `go.yml` (mo
 
 ## Standalone executable (no Python needed)
 
-DataPulse is built as a single executable with its own Python runtime bundled (about 100 MB, because it includes
-pandas and Parquet support). Teams in Go, Node, Java, Rust, .NET, etc. can run it without installing Python.
+DataPulse is built as a single executable with its own Python runtime bundled (about 180 MB, because it includes
+pandas, Parquet support and scikit-learn). Teams in Go, Node, Java, Rust, .NET, etc. can run it without installing Python.
 
 ```bash
 # use a release build
@@ -134,7 +165,7 @@ release workflow builds on standard runners.
 
 ## Install
 
-From a source checkout (Python 3.9+; other options in the table above):
+From a source checkout (Python 3.10+; other options in the table above):
 
 ```bash
 git clone <this-repo> datapulse && cd datapulse
@@ -182,8 +213,9 @@ Re-running `datapulse baseline` after an intentional data change bumps `baseline
 |---|---|
 | `datapulse init` | Write a starter `datapulse.yml`. |
 | `datapulse baseline <file> [-c CONFIG] [-o PATH]` | Profile a known-good file into a versioned baseline JSON. |
-| `datapulse check <file> [-c CONFIG] [--baseline PATH] [--baseline-ref REF] [--config-ref REF] [--markdown PATH] [--json PATH] [--discover] [--scan-root DIR] [--ai]` | Run all checks. |
+| `datapulse check <file> [-c CONFIG] [--baseline PATH] [--baseline-ref REF] [--config-ref REF] [--markdown PATH] [--json PATH] [--discover] [--scan-root DIR] [--reference FILE] [--triage] [--ai]` | Run all checks. `--reference` (the known-good data file) adds the ML drift check; `--triage` runs the AI agent on failures. |
 | `datapulse scan <file> [--root DIR] [--scope readers\|all] [--exclude DIR] [-o FILE]` | Recognize languages in a repo and find code that reads the data file. |
+| `datapulse draft-rules "<request>" [--data FILE] [-o FILE]` | Plain-English request -> complete, validated `datapulse.yml` (AI). Prints it or writes a **new** file. |
 | `datapulse suggest <file> [-o FILE] [--force] [--ai]` | Propose rules from the profile. Prints YAML or writes a **new** file; refuses to touch your config. |
 | `datapulse github-outputs <report.json>` | Print `status`, `issue-count`, `schema-changed`, `affected-consumers` as `key=value` lines for `$GITHUB_OUTPUT` (values are sanitized). |
 | `datapulse comment <report.md> [--repo OWNER/NAME] [--pr N]` | Create/update the PR comment (uses `GITHUB_TOKEN`). |
@@ -201,6 +233,7 @@ Re-running `datapulse baseline` after an intentional data change bumps `baseline
 | `categorical` | Values not seen in the baseline (low-cardinality text columns) | `max_unexpected_rate`, `columns` |
 | `duplicates` | Duplicate key values or whole rows | `columns`, `max_duplicate_rate` |
 | `distribution` | Numeric shift: Population Stability Index (PSI) and mean shift in baseline std units | `psi_threshold`, `max_mean_shift_std`, `columns` |
+| `ml_drift` | Learned drift: a model separates baseline rows from new rows (needs the baseline's rows) | `max_auc`, `max_rows`, `exclude` |
 
 Severities are `critical`, `warning`, `info`, or `off`. `fail_on` (`critical` by default; also `warning`, `info`,
 `never`) decides which severity produces exit code 1.
@@ -277,7 +310,7 @@ touches your project's dependencies or lockfiles), writes its reports outside yo
 The default `github.token` is used; no tokens are stored. On fork PRs the token is read-only, so the comment step
 is skipped without failing the job and the report remains in the job summary.
 
-## Optional AI explanations
+## AI explanations from the CLI
 
 ```bash
 export ANTHROPIC_API_KEY=...        # name configurable via ai.api_key_env

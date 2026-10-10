@@ -2,7 +2,7 @@
 deterministic *suggested* explanation that is explicitly not verified."""
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -248,6 +248,26 @@ def check_distribution(base: Dict, cur: Dict, df: pd.DataFrame, cfg: Config) -> 
     return out
 
 
+def check_ml_drift(reference: pd.DataFrame, df: pd.DataFrame, cfg: Config) -> List[Issue]:
+    from .ml import drift_model, top_drivers
+    md = cfg.ml_drift
+    res = drift_model(reference, df, md.exclude, md.max_rows)
+    if res["auc"] is None or res["auc"] <= md.max_auc:
+        return []
+    drivers = top_drivers(res["drivers"])
+    named = ", ".join(f"{c} ({share:.0%})" for c, share in drivers)
+    skipped = ", ".join(f"{c} ({why})" for c, why in res["skipped"].items())
+    return [Issue("ml_drift", md.severity, "A model can tell the new data from the baseline",
+                  f"A classifier trained to separate baseline rows from new rows scored AUC {res['auc']:.2f} "
+                  f"(0.5 = indistinguishable; allowed {md.max_auc:g}). It relied most on: {named}.",
+                  [c for c, _ in drivers],
+                  {"drift_auc": res["auc"], "allowed_auc": md.max_auc, "top_drivers": named,
+                   "rows_compared_per_file": res["rows_per_side"], "columns_not_modelled": skipped or "none"},
+                  explanation="The rows no longer look like they come from the same population. Check the driver "
+                              "columns first: a unit change, a new source system, a changed filter, or a shift in "
+                              "how these columns relate to each other (which per-column checks cannot see).")]
+
+
 def _consumers_for(issue: Issue, cfg: Config) -> List[Dict[str, Any]]:
     cols = set(issue.columns)
     out = []
@@ -260,29 +280,23 @@ def _consumers_for(issue: Issue, cfg: Config) -> List[Dict[str, Any]]:
 
 
 def run_checks(baseline: Dict, df: pd.DataFrame, cfg: Config, data_file: str = "",
-               baseline_label: str = "baseline", config_label: str = "defaults") -> CheckReport:
+               baseline_label: str = "baseline", config_label: str = "defaults",
+               reference: Optional[pd.DataFrame] = None) -> CheckReport:
+    """`reference` is the baseline's rows; when given, the learned `ml_drift` check runs too."""
     base = baseline["profile"]
     cur = profile_dataframe(df, cfg.max_categories)
-    issues: List[Issue] = []
-    ran: List[str] = []
-    if any(v != "off" for v in (cfg.schema.missing_columns, cfg.schema.added_columns, cfg.schema.type_changes)):
-        ran.append("schema")
-        issues += check_schema(base, cur, cfg)
-    if cfg.row_count.severity != "off":
-        ran.append("row_count")
-        issues += check_row_count(base, cur, cfg)
-    if cfg.null_rate.severity != "off":
-        ran.append("null_rate")
-        issues += check_null_rate(base, cur, cfg)
-    if cfg.categorical.severity != "off":
-        ran.append("categorical")
-        issues += check_categorical(base, df, cfg)
-    if cfg.duplicates.severity != "off":
-        ran.append("duplicates")
-        issues += check_duplicates(base, df, cfg)
-    if cfg.distribution.severity != "off":
-        ran.append("distribution")
-        issues += check_distribution(base, cur, df, cfg)
+    checks = {  # name -> (enabled, run)
+        "schema": (any(v != "off" for v in vars(cfg.schema).values()), lambda: check_schema(base, cur, cfg)),
+        "row_count": (cfg.row_count.severity != "off", lambda: check_row_count(base, cur, cfg)),
+        "null_rate": (cfg.null_rate.severity != "off", lambda: check_null_rate(base, cur, cfg)),
+        "categorical": (cfg.categorical.severity != "off", lambda: check_categorical(base, df, cfg)),
+        "duplicates": (cfg.duplicates.severity != "off", lambda: check_duplicates(base, df, cfg)),
+        "distribution": (cfg.distribution.severity != "off", lambda: check_distribution(base, cur, df, cfg)),
+        "ml_drift": (cfg.ml_drift.severity != "off" and reference is not None,
+                     lambda: check_ml_drift(reference, df, cfg)),
+    }
+    ran = [name for name, (enabled, _) in checks.items() if enabled]
+    issues = [issue for name in ran for issue in checks[name][1]()]
     for i in issues:
         i.consumers = _consumers_for(i, cfg)
     issues.sort(key=lambda i: (-LEVEL[i.severity], i.check, ",".join(i.columns)))

@@ -126,3 +126,60 @@ def test_project_listing_never_returns_keys(client, project):
     listed = client.get("/api/projects").json()
     assert listed[0]["id"] == project["id"]
     assert "api_key" not in json.dumps(listed) and "api_key_hash" not in json.dumps(listed)
+
+
+def test_delete_project_removes_its_data_but_not_shared_files(client, project, tmp_path):
+    pid = project["id"]
+    client.post(f"/api/projects/{pid}/baseline", files={"file": ("o.csv", _csv(make_df()), "text/csv")})
+    client.post(f"/api/projects/{pid}/runs", files={"file": ("o.csv", _csv(make_df()), "text/csv")})
+    seeded = client.post("/api/demo/seed").json()  # its baseline points at examples/, which must survive
+    assert client.delete(f"/api/projects/{pid}").json() == {"deleted": True}
+    assert client.get(f"/api/projects/{pid}").status_code == 404
+    assert list((tmp_path / "home" / "uploads").iterdir()) == []
+    assert client.delete(f"/api/projects/{seeded['id']}").status_code == 200
+    assert (ROOT / "examples" / "data" / "orders.csv").exists()
+    assert client.delete(f"/api/projects/{pid}").status_code == 404
+    assert client.get("/api/projects").json() == []
+
+
+def test_runs_in_the_same_second_are_listed_newest_first(client, project):
+    pid = project["id"]
+    df = make_df()
+    client.post(f"/api/projects/{pid}/baseline", files={"file": ("o.csv", _csv(df), "text/csv")})
+    ids = [client.post(f"/api/projects/{pid}/runs", files={"file": ("o.csv", _csv(df), "text/csv")}).json()["run_id"]
+           for _ in range(3)]
+    assert [r["id"] for r in client.get(f"/api/projects/{pid}").json()["runs"]] == ids[::-1]
+
+
+def test_ml_drift_runs_automatically_and_triage_is_saved_with_the_run(client, monkeypatch):
+    from fake_claude import FakeClaude, text, tool_calls
+    seeded = client.post("/api/demo/seed").json()
+    drifted = (ROOT / "examples" / "data" / "orders_drifted.csv").read_bytes()
+    doc = client.post(f"/api/projects/{seeded['id']}/runs", files={"file": ("d.csv", drifted, "text/csv")}).json()
+    ml = next(i for i in doc["issues"] if i["check"] == "ml_drift")
+    assert ml["measured"]["drift_auc"] > 0.9 and ml["columns"][0] == "amount"
+    url = f"/api/projects/{seeded['id']}/runs/{doc['run_id']}/triage"
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert client.get("/api/health").json()["ai"] is False
+    r = client.post(url)
+    assert r.status_code == 503 and "ANTHROPIC_API_KEY" in r.json()["detail"]
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    triage = {"headline": "h", "verdict": "investigate", "verdict_reason": "r", "root_causes": [],
+              "actions": [], "notify": [], "message": "m"}
+    fake = FakeClaude([tool_calls(("get_run_history", {})), text(json.dumps(triage))])
+    monkeypatch.setattr("datapulse.agent.get_client", lambda cfg: fake)
+    assert client.post(url).json()["verdict"] == "investigate"
+    assert client.get(f"/api/projects/{seeded['id']}/runs/{doc['run_id']}").json()["triage"]["headline"] == "h"
+    assert "[]" in fake.calls[1]["messages"][-1]["content"][0]["content"]  # history: no earlier runs
+
+
+def test_draft_rules_endpoint_validates_the_draft(client, project, monkeypatch):
+    from fake_claude import FakeClaude, text
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    draft = {"config_yaml": CONFIG + "fail_on: warning\n", "summary": "Fail on warnings", "not_supported": []}
+    monkeypatch.setattr("datapulse.ai.get_client", lambda cfg: FakeClaude([text(json.dumps(draft))]))
+    r = client.post(f"/api/projects/{project['id']}/rules/draft", json={"request": "fail on warnings", "config_yaml": CONFIG})
+    assert r.status_code == 200 and r.json()["config_yaml"].endswith("fail_on: warning\n")
+    assert client.get(f"/api/projects/{project['id']}").json()["fail_on"] == "critical"  # nothing saved
