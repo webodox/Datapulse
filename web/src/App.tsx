@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { api, API_ORIGIN, plural, type Created, type Project } from './api'
+import { api, API_ORIGIN, plural, type Created, type Project, type User } from './api'
+import { AccountPage, SignIn } from './auth'
 import { Icon } from './icons'
 import { ProjectView, TABS, type Tab } from './project'
 import { Modal, Spinner, ToastProvider, useAction, useNotify, useTheme } from './ui'
 
-export type Route = { id?: string; tab: Tab; run?: string }
+export type Route = { id?: string; tab: Tab; run?: string; account?: boolean }
 
 // #/p/<project>/<tab>/<run> — the URL is the source of truth, so links and the back button work.
 function parseHash(): Route {
+  if (window.location.hash.startsWith('#/account')) return { tab: 'checks', account: true }
   const [, id, tab, run] = window.location.hash.match(/^#\/p\/([\w-]+)(?:\/(\w+))?(?:\/([\w-]+))?/) || []
   return { id, tab: TABS.includes(tab as Tab) ? tab as Tab : 'checks', run }
 }
@@ -27,10 +29,29 @@ function useRoute() {
 }
 
 export default function App() {
-  return <ToastProvider><Shell /></ToastProvider>
+  return <ToastProvider><Gate /></ToastProvider>
 }
 
-function Shell() {
+/** Nothing but the sign-in screen until someone is signed in. */
+function Gate() {
+  const [auth, setAuth] = useState<{ setupNeeded: boolean; user: User | null } | 'offline' | null>(null)
+  const check = useCallback(() => api.authStatus().then(s => setAuth({ setupNeeded: s.setup_needed, user: s.user }),
+    () => setAuth('offline')), [])
+  useEffect(() => {
+    check()
+    const signedOut = () => setAuth(a => a && a !== 'offline' ? { ...a, user: null } : a)
+    window.addEventListener('datapulse:signed-out', signedOut)
+    return () => window.removeEventListener('datapulse:signed-out', signedOut)
+  }, [check])
+
+  if (auth === null) return <div className="loading center"><span className="spinner" /> Loading…</div>
+  if (auth === 'offline') return <div className="main"><Offline retry={check} /></div>
+  if (!auth.user) return <SignIn setupNeeded={auth.setupNeeded} onSignedIn={user => setAuth({ setupNeeded: false, user })} />
+  const signOut = () => api.logout().finally(() => setAuth({ setupNeeded: false, user: null }))
+  return <Shell user={auth.user} signOut={signOut} />
+}
+
+function Shell({ user, signOut }: { user: User; signOut: () => void }) {
   const { theme, toggle } = useTheme()
   const [route, go] = useRoute()
   const [projects, setProjects] = useState<Project[] | null>(null)
@@ -44,8 +65,8 @@ function Shell() {
 
   // Land on the first project when the URL doesn't name one that exists.
   useEffect(() => {
-    if (projects?.length && !projects.some(p => p.id === route.id)) go({ id: projects[0].id, tab: 'checks' }, true)
-  }, [projects, route.id, go])
+    if (!route.account && projects?.length && !projects.some(p => p.id === route.id)) go({ id: projects[0].id, tab: 'checks' }, true)
+  }, [projects, route.id, route.account, go])
 
   const opened = useCallback((created: Created) => {
     setNewKey({ id: created.id, key: created.api_key })
@@ -67,15 +88,23 @@ function Shell() {
         </a>)}
       </nav>
       <div className="sidebar-foot">
-        <a href={`${API_ORIGIN}/docs`} target="_blank" rel="noreferrer"><Icon name="code" size={14} /> API docs</a>
-        <button className="icon-btn" onClick={toggle} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
-          <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
-        </button>
+        <a href="#/account" className={`me ${route.account ? 'active' : ''}`} title="Account & team">
+          <span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>
+          <span><b>{user.name}</b><small>{user.role === 'admin' ? 'Admin · manage team' : 'Account'}</small></span>
+        </a>
+        <div className="foot-actions">
+          <a href={`${API_ORIGIN}/docs`} target="_blank" rel="noreferrer"><Icon name="code" size={14} /> API docs</a>
+          <button className="icon-btn" onClick={toggle} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
+          </button>
+          <button className="button ghost small-btn" onClick={signOut}>Sign out</button>
+        </div>
       </div>
     </aside>
 
     <main className="main">
-      {offline ? <Offline retry={refresh} />
+      {route.account ? <AccountPage user={user} />
+        : offline ? <Offline retry={refresh} />
         : projects === null ? <div className="loading"><span className="spinner" /> Loading…</div>
         : !projects.length ? <Welcome onCreated={opened} />
         : active && <ProjectView key={active.id} route={{ ...route, id: active.id }} go={go} onChanged={refresh} ai={ai}
@@ -93,9 +122,8 @@ function Offline({ retry }: { retry: () => void }) {
   return <div className="center-card">
     <span className="empty-icon bad"><Icon name="plug" size={22} /></span>
     <h1>Can't reach the DataPulse API</h1>
-    <p>In the project folder (not <code>web</code>), start the server in its own terminal, then try again:</p>
-    <pre className="inline-code">python -m uvicorn server.app:app --port 8000</pre>
-    <p className="muted">It's running when that terminal shows <code>Uvicorn running on http://127.0.0.1:8000</code>.</p>
+    <p>Start it from the project folder, then try again:</p>
+    <pre className="inline-code">docker compose up</pre>
     <button className="button primary" onClick={retry}>Try again</button>
   </div>
 }

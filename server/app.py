@@ -12,13 +12,13 @@ import os
 import secrets
 import sqlite3
 import uuid
-from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 import pandas as pd
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -34,76 +34,17 @@ from datapulse.profile import profile_dataframe
 from datapulse.report import render_json, render_markdown
 from datapulse.suggest import render_yaml, suggest_rules
 
+from .auth import current_user, needs_login, router as auth_router
+from .db import connect, init_db, now_iso, upload_dir
+
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_INGEST_ROWS = 50_000
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_LABEL = "project config (dashboard)"
 
 
-def home() -> Path:
-    return Path(os.getenv("DATAPULSE_HOME", ".datapulse")).resolve()
-
-
-def upload_dir() -> Path:
-    return home() / "uploads"
-
-
 def _loads(text: Optional[str]) -> Any:
     return json.loads(text) if text else None
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-@contextmanager
-def connect() -> Iterator[sqlite3.Connection]:
-    home().mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(home() / "datapulse.sqlite3")
-    db.row_factory = sqlite3.Row
-    try:
-        with db:  # commit on success, roll back on error
-            yield db
-    finally:
-        db.close()
-
-
-def init_db() -> None:
-    upload_dir().mkdir(parents=True, exist_ok=True)
-    with connect() as db:
-        db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS projects (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                api_key_hash TEXT NOT NULL,
-                config_yaml TEXT NOT NULL,
-                baseline_json TEXT,
-                baseline_dataset_id TEXT,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS datasets (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                name TEXT NOT NULL,
-                filename TEXT NOT NULL,
-                role TEXT NOT NULL,
-                row_count INTEGER NOT NULL,
-                columns_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS runs (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                dataset_id TEXT NOT NULL REFERENCES datasets(id),
-                status TEXT NOT NULL,
-                issue_count INTEGER NOT NULL,
-                report_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS runs_project_created ON runs(project_id, created_at DESC);
-            """
-        )
 
 
 @asynccontextmanager
@@ -119,7 +60,18 @@ app.add_middleware(
     allow_origins=os.getenv("DATAPULSE_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
+app.include_router(auth_router)
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    if needs_login(request.url.path, request.method):
+        request.state.user = current_user(request)
+        if request.state.user is None:
+            return JSONResponse({"detail": "Please sign in"}, status_code=401)
+    return await call_next(request)
 
 
 class CreateProject(BaseModel):
@@ -133,6 +85,10 @@ class SaveConfig(BaseModel):
 class DraftRules(BaseModel):
     request: str = Field(min_length=3, max_length=2_000)
     config_yaml: str = Field(max_length=20_000)  # the editor's current text, saved or not
+
+
+class Review(BaseModel):
+    status: Literal["open", "acknowledged", "resolved"]
 
 
 class IngestRows(BaseModel):
@@ -222,7 +178,8 @@ def _dataset_rows(dataset_id: Optional[str]) -> Optional[pd.DataFrame]:
         return None
 
 
-def _run_check(project: sqlite3.Row, name: str, path: Path, df: pd.DataFrame, use_ai: bool) -> Dict[str, Any]:
+def _run_check(project: sqlite3.Row, name: str, path: Path, df: pd.DataFrame, use_ai: bool,
+               actor: str) -> Dict[str, Any]:
     if not project["baseline_json"]:
         raise HTTPException(409, "Create a baseline dataset before running a check")
     cfg = _config(project["config_yaml"])
@@ -235,18 +192,19 @@ def _run_check(project: sqlite3.Row, name: str, path: Path, df: pd.DataFrame, us
     run_id = uuid.uuid4().hex[:12]
     doc.update(run_id=run_id, ai_note=ai_note or None, markdown=render_markdown(report))
     with connect() as db:
-        db.execute("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?)",
-                   (run_id, project["id"], dataset_id, doc["status"], len(doc["issues"]), json.dumps(doc), now_iso()))
+        db.execute("INSERT INTO runs (id, project_id, dataset_id, status, issue_count, report_json, created_at, "
+                   "created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (run_id, project["id"], dataset_id, doc["status"],
+                                                                 len(doc["issues"]), json.dumps(doc), now_iso(), actor))
     return doc
 
 
-def _handle(project_id: str, name: str, path: Path, role: str, use_ai: bool = False) -> Dict[str, Any]:
+def _handle(project_id: str, name: str, path: Path, role: str, actor: str, use_ai: bool = False) -> Dict[str, Any]:
     try:
         project = _project(project_id)
         df = _load(path)
         if role == "baseline":
             return _save_baseline(project, name, path, df)
-        return _run_check(project, name, path, df, use_ai)
+        return _run_check(project, name, path, df, use_ai, actor)
     except HTTPException:
         path.unlink(missing_ok=True)  # rejected uploads are not kept
         raise
@@ -296,7 +254,8 @@ def get_project(project_id: str) -> dict:
     with connect() as db:
         datasets = db.execute("SELECT id, name, role, row_count, columns_json, created_at FROM datasets "
                               "WHERE project_id = ? ORDER BY created_at DESC, rowid DESC", (project_id,)).fetchall()
-        runs = db.execute("SELECT id, status, issue_count, created_at, report_json FROM runs "
+        runs = db.execute("SELECT id, status, issue_count, created_at, report_json, created_by, review_status, "
+                          "review_by, review_at FROM runs "
                           "WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 30", (project_id,)).fetchall()
     baseline = _loads(project["baseline_json"])
     cfg = _config(project["config_yaml"])
@@ -310,6 +269,8 @@ def get_project(project_id: str) -> dict:
         "datasets": [{"id": d["id"], "name": d["name"], "role": d["role"], "row_count": d["row_count"],
                       "columns": json.loads(d["columns_json"]), "created_at": d["created_at"]} for d in datasets],
         "runs": [{"id": r["id"], "status": r["status"], "issue_count": r["issue_count"], "created_at": r["created_at"],
+                  "created_by": r["created_by"], "review": {"status": r["review_status"], "by": r["review_by"],
+                                                            "at": r["review_at"]},
                   "report": json.loads(r["report_json"])} for r in runs],
     }
 
@@ -332,21 +293,23 @@ def suggestions(project_id: str) -> dict:
     return {"yaml": render_yaml(suggest_rules(json.loads(project["baseline_json"])["profile"]))}
 
 
-async def _upload(project_id: str, file: UploadFile, name: Optional[str], role: str, use_ai: bool = False) -> dict:
+async def _upload(request: Request, project_id: str, file: UploadFile, name: Optional[str], role: str,
+                  use_ai: bool = False) -> dict:
     _project(project_id)
     path = _save_upload(file.filename or "", await file.read(MAX_UPLOAD_BYTES + 1))
-    return _handle(project_id, name or file.filename or role, path, role, use_ai)
+    return _handle(project_id, name or file.filename or role, path, role, request.state.user["name"], use_ai)
 
 
 @app.post("/api/projects/{project_id}/baseline")
-async def upload_baseline(project_id: str, file: UploadFile = File(...), name: Optional[str] = Form(None)) -> dict:
-    return await _upload(project_id, file, name, "baseline")
+async def upload_baseline(request: Request, project_id: str, file: UploadFile = File(...),
+                          name: Optional[str] = Form(None)) -> dict:
+    return await _upload(request, project_id, file, name, "baseline")
 
 
 @app.post("/api/projects/{project_id}/runs")
-async def upload_candidate(project_id: str, file: UploadFile = File(...), name: Optional[str] = Form(None),
-                           use_ai: bool = Form(False)) -> dict:
-    return await _upload(project_id, file, name, "candidate", use_ai)
+async def upload_candidate(request: Request, project_id: str, file: UploadFile = File(...),
+                           name: Optional[str] = Form(None), use_ai: bool = Form(False)) -> dict:
+    return await _upload(request, project_id, file, name, "candidate", use_ai)
 
 
 @app.delete("/api/projects/{project_id}")
@@ -377,7 +340,7 @@ def ingest_rows(project_id: str, payload: IngestRows, x_datapulse_key: Optional[
         raise HTTPException(413, "JSON batch exceeds the 25 MB limit")
     path = upload_dir() / f"{uuid.uuid4().hex}.jsonl"
     path.write_text(body + "\n", encoding="utf-8")
-    return _handle(project_id, payload.dataset_name, path, payload.role, payload.use_ai)
+    return _handle(project_id, payload.dataset_name, path, payload.role, "API", payload.use_ai)
 
 
 @app.post("/api/demo/seed")
@@ -399,7 +362,7 @@ def _ai(call):
 
 
 @app.post("/api/projects/{project_id}/runs/{run_id}/triage")
-def triage_run(project_id: str, run_id: str) -> dict:
+def triage_run(project_id: str, run_id: str, request: Request) -> dict:
     """Let the AI triage agent investigate a run and write the incident note. Saved with the run."""
     project = _project(project_id)
     with connect() as db:
@@ -421,10 +384,23 @@ def triage_run(project_id: str, run_id: str) -> dict:
                   "failing": sorted({f"{i['check']}:{','.join(i['columns'])}" for i in json.loads(h["report_json"])["issues"]})}
                  for h in history],
         consumers=[vars(c) for c in cfg.consumers])
-    doc["triage"] = _ai(lambda: run_triage(ctx, cfg))
+    doc["triage"] = {**_ai(lambda: run_triage(ctx, cfg)), "by": request.state.user["name"], "at": now_iso()}
     with connect() as db:
         db.execute("UPDATE runs SET report_json = ? WHERE id = ?", (json.dumps(doc), run_id))
     return doc["triage"]
+
+
+@app.put("/api/projects/{project_id}/runs/{run_id}/review")
+def review_run(project_id: str, run_id: str, payload: Review, request: Request) -> dict:
+    """Shared issue status, so the team can see who is handling a failed check."""
+    review = {"status": payload.status, "by": request.state.user["name"], "at": now_iso()}
+    with connect() as db:
+        updated = db.execute("UPDATE runs SET review_status = ?, review_by = ?, review_at = ? "
+                             "WHERE id = ? AND project_id = ?",
+                             (review["status"], review["by"], review["at"], run_id, project_id)).rowcount
+    if not updated:
+        raise HTTPException(404, "Run not found")
+    return review
 
 
 @app.post("/api/projects/{project_id}/rules/draft")

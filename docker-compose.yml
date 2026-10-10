@@ -8,6 +8,7 @@ services:
       DATAPULSE_HOME: /data
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_WORKSPACE_ID: ${ANTHROPIC_WORKSPACE_ID:-}
+      DATAPULSE_SECURE_COOKIES: ${DATAPULSE_SECURE_COOKIES:-}
     volumes:
       - datapulse-data:/data
     ports:
