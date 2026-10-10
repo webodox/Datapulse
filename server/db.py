@@ -103,6 +103,16 @@ CREATE TABLE IF NOT EXISTS sources (
     created_by TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS destinations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    settings_json TEXT NOT NULL,       -- url (secret, never returned to the browser), table, mode
+    last_sent_at TEXT,
+    last_result TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
