@@ -79,6 +79,13 @@ A person reviews the steps and approves them. From then on every pull replays th
 result, and **Unify** combines all sources into one table (with a `_source` column) you can download. If a source
 changes shape so a step no longer applies, the run says so instead of guessing.
 
+**Sending unified data to your own database.** Under *Send unified data to* on the Sources tab, add a destination:
+a connection URL (PostgreSQL/Supabase, MySQL, SQL Server, MongoDB, or any SQLAlchemy database), one table name, and
+whether each unify **replaces** the table's contents or **adds** its rows. Every Unify then writes the result
+there automatically (SQL writes are one transaction: all rows or none), and the report says what was sent. Data that
+fails its checks is **held back** and never written. Only the named table is ever touched, and it is created on
+the first send. The database user needs permission to write it.
+
 **Safety.** Connection URLs and passwords stay in the server's database and are never sent back to the browser or
 shown in error messages. Queries are read-only: a table name becomes `SELECT * FROM table`, anything else must be
 one `SELECT` query, and it runs in a transaction that is rolled back (marked read-only on PostgreSQL). Use a

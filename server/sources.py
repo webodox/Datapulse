@@ -26,6 +26,7 @@ from datapulse.sources import catalog, clean_settings, fetch_source, public_sett
 from datapulse.unify import SOURCE_COLUMN, apply_recipe, combine, propose_mapping, validate_recipe
 
 from .core import MAX_UPLOAD_BYTES, ROOT, ai_call, dataset_rows, loads, project_config, project_row, run_check, save_baseline
+from .destinations import deliver
 from .db import configure_sources, connect, now_iso, samples_dir, source_files_dir, upload_dir
 
 router = APIRouter(prefix="/api")
@@ -364,5 +365,10 @@ def unify(project_id: str, request: Request) -> dict:
                             + "; ".join(f"{r['name']}: {r['error']}" for r in report))
     combined = combine(frames, list(profile["columns"]))
     name = f"Unified data ({len(frames)} source{'s' if len(frames) != 1 else ''})"
-    return run_check(project, name, _store(combined), combined, False, request.state.user["name"],
-                     {"unified": {"sources": report}}, checked=combined.drop(columns=[SOURCE_COLUMN]), combined=True)
+    doc = run_check(project, name, _store(combined), combined, False, request.state.user["name"],
+                    {"unified": {"sources": report}}, checked=combined.drop(columns=[SOURCE_COLUMN]), combined=True)
+    doc["delivered"] = deliver(project_id, doc, combined)
+    if doc["delivered"]:
+        with connect() as db:
+            db.execute("UPDATE runs SET report_json = ? WHERE id = ?", (json.dumps(doc), doc["run_id"]))
+    return doc

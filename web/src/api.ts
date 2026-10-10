@@ -17,6 +17,7 @@ export type Report = {
   charts?: Record<string, ColumnChart>; fix?: Fix | null
   source?: { id: string; name: string; kind: string; type?: string; rows_pulled: number; mapped: boolean; steps: string[]; problems: string[] }
   unified?: { sources: Array<{ name: string; kind: string; type?: string; rows: number; error: string | null; problems: string[] }> }
+  delivered?: Delivery[]
 }
 export type ColumnChart = {
   null_rate: [number, number | null]
@@ -39,6 +40,12 @@ export type Source = {
   status: 'standard' | 'mapped' | 'needs_mapping'; recipe: Step[]; proposal: Mapping | null
   last_pulled_at: string | null; last_run_id: string | null; created_by: string | null; created_at: string
 }
+export type Delivery = { id: string; name: string; type: string; table: string; ok: boolean; held: boolean; message: string }
+export type Destination = {
+  id: string; name: string; type: string; table: string; mode: 'replace' | 'append'; saved_secrets: string[]
+  last_sent_at: string | null; last_result: string | null; created_by: string | null; created_at: string
+}
+export type DestinationForm = { name: string; url: string; table: string; mode: 'replace' | 'append' }
 export type SourceForm = { name: string; kind: string; settings: Record<string, string> }
 export type ColumnSide = { kind: string; null_rate: number | null; mean: number | null; min: number | null; max: number | null; top: string[]; samples?: string[] }
 export type ColumnIssue = { severity: Severity; title: string; detail: string }
@@ -127,6 +134,13 @@ export const api = {
   saveRecipe: (id: string, sid: string, operations: Step[]) => request<Source>('PUT', `/api/projects/${id}/sources/${sid}/recipe`, { operations }),
   pullSource: (id: string, sid: string, role: 'baseline' | 'candidate') =>
     request<Report & { run_id?: string }>('POST', `/api/projects/${id}/sources/${sid}/pull`, { role }),
+  destinations: (id: string) => request<Destination[]>('GET', `/api/projects/${id}/destinations`),
+  testDestination: (id: string, form: Omit<DestinationForm, 'name'>, destination_id?: string) =>
+    request<{ ok: boolean; message: string }>('POST', `/api/projects/${id}/destinations/test`, { ...form, destination_id }),
+  addDestination: (id: string, form: DestinationForm) => request<Destination>('POST', `/api/projects/${id}/destinations`, form),
+  editDestination: (id: string, did: string, form: DestinationForm) => request<Destination>('PUT', `/api/projects/${id}/destinations/${did}`, form),
+  removeDestination: (id: string, did: string) => request('DELETE', `/api/projects/${id}/destinations/${did}`),
+  sendRun: (id: string, run: string) => request<{ delivered: Delivery[] }>('POST', `/api/projects/${id}/runs/${run}/send`),
   unify: (id: string) => request<Report & { run_id: string }>('POST', `/api/projects/${id}/unify`),
   checkFixed: (id: string, run: string) => request<Report & { run_id: string }>('POST', `/api/projects/${id}/runs/${run}/fixed/check`),
   fixedUrl: (id: string, run: string) => `${API}/api/projects/${id}/runs/${run}/fixed`,
