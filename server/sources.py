@@ -20,6 +20,7 @@ from datapulse.errors import DataPulseError
 from datapulse.io import ARCHIVES, INPUTS, load_dataframe
 from datapulse.sources.connected import read_any
 from datapulse.unifier.documents import is_document
+from datapulse.compare import compare_mapping
 from datapulse.samples import write_samples
 from datapulse.sources import catalog, clean_settings, fetch_source, public_settings, try_connection, type_of
 from datapulse.unify import SOURCE_COLUMN, apply_recipe, combine, propose_mapping, validate_recipe
@@ -62,6 +63,10 @@ class Pull(BaseModel):
 
 class Recipe(BaseModel):
     operations: list = Field(max_length=100)
+
+
+class Compare(BaseModel):
+    operations: Optional[list] = Field(default=None, max_length=100)  # None: the proposal, else the saved recipe
 
 
 def _source(project_id: str, source_id: str) -> sqlite3.Row:
@@ -269,6 +274,24 @@ def map_source(project_id: str, source_id: str) -> dict:
     proposal["at"] = now_iso()
     _update(source_id, proposal_json=json.dumps(proposal))
     return proposal
+
+
+@router.post("/projects/{project_id}/sources/{source_id}/compare")
+def compare_source(project_id: str, source_id: str, payload: Compare) -> dict:
+    """Their columns next to the standard's, after the given steps (the proposal or saved recipe by default)."""
+    project, row = project_row(project_id), _source(project_id, source_id)
+    if not project["baseline_json"]:
+        raise HTTPException(409, "Set the standard format first: pull one source as the baseline")
+    if payload.operations is not None:
+        try:
+            recipe = validate_recipe(payload.operations)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    else:
+        proposal = loads(row["proposal_json"])
+        recipe = proposal["operations"] if proposal else loads(row["recipe_json"]) or []
+    return compare_mapping(_fetch(row), json.loads(project["baseline_json"]), project_config(project["config_yaml"]),
+                           recipe)
 
 
 @router.delete("/projects/{project_id}/sources/{source_id}/proposal")

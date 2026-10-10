@@ -13,7 +13,7 @@ export type Issue = {
 export type Report = {
   status: 'passed' | 'failed'; issues: Issue[]; rows: { baseline: number; current: number }
   passed_checks: string[]; affected_consumers: string[]; schema_changed: boolean; data_file: string
-  ai_note?: string | null; markdown?: string; triage?: Triage | null
+  ai_note?: string | null; markdown?: string; triage?: Triage | null; counts?: Record<Severity, number>
   charts?: Record<string, ColumnChart>; fix?: Fix | null
   source?: { id: string; name: string; kind: string; type?: string; rows_pulled: number; mapped: boolean; steps: string[]; problems: string[] }
   unified?: { sources: Array<{ name: string; kind: string; type?: string; rows: number; error: string | null; problems: string[] }> }
@@ -40,6 +40,19 @@ export type Source = {
   last_pulled_at: string | null; last_run_id: string | null; created_by: string | null; created_at: string
 }
 export type SourceForm = { name: string; kind: string; settings: Record<string, string> }
+export type ColumnSide = { kind: string; null_rate: number | null; mean: number | null; min: number | null; max: number | null; top: string[]; samples?: string[] }
+export type ColumnIssue = { severity: Severity; title: string; detail: string }
+export type ComparedColumn = {
+  name: string; source: string | null; status: 'same' | 'renamed' | 'converted' | 'flagged' | 'missing'
+  steps: Array<{ operation: string; effect: string }>; issues: ColumnIssue[]
+  standard: ColumnSide; before: ColumnSide | null; after: ColumnSide | null
+}
+export type Comparison = {
+  columns: ComparedColumn[]; extra: Array<{ name: string; as: string; after: ColumnSide }>
+  dropped: Array<{ name: string; effect: string }>; table_steps: string[]; problems: string[]
+  rows: { before: number; after: number; standard: number }; before: Counts; after: Counts
+  table_issues: ColumnIssue[]; show_values: boolean
+}
 export type Triage = {
   headline: string; verdict: 'block' | 'investigate' | 'safe_to_ship'; verdict_reason: string
   root_causes: Array<{ hypothesis: string; confidence: 'low' | 'medium' | 'high'; evidence: string }>
@@ -108,6 +121,8 @@ export const api = {
   editSource: (id: string, sid: string, form: SourceForm) => request<Source>('PUT', `/api/projects/${id}/sources/${sid}`, form),
   removeSource: (id: string, sid: string) => request('DELETE', `/api/projects/${id}/sources/${sid}`),
   mapSource: (id: string, sid: string) => request<Mapping>('POST', `/api/projects/${id}/sources/${sid}/map`),
+  compareSource: (id: string, sid: string, operations?: Step[]) =>
+    request<Comparison>('POST', `/api/projects/${id}/sources/${sid}/compare`, { operations: operations ?? null }),
   discardMapping: (id: string, sid: string) => request<Source>('DELETE', `/api/projects/${id}/sources/${sid}/proposal`),
   saveRecipe: (id: string, sid: string, operations: Step[]) => request<Source>('PUT', `/api/projects/${id}/sources/${sid}/recipe`, { operations }),
   pullSource: (id: string, sid: string, role: 'baseline' | 'candidate') =>

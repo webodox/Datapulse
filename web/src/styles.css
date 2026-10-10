@@ -445,3 +445,99 @@ em.bad { color: var(--crit-text); font-style: normal }
 .file-pick { display: grid; gap: 4px; font-weight: 400 }
 .file-pick input { font: 14px var(--font) }
 .detected { display: inline-flex; align-items: center; gap: 5px; color: var(--good-text); font-weight: 600 }
+
+/* ---------- health cards ---------- */
+.health { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px }
+.health-card { margin: 0; display: grid; gap: 2px; border-top: 3px solid var(--border-strong); padding: 14px 16px; position: relative }
+.health-card small { color: var(--muted); font-weight: 600 }
+.health-card b { font-size: 26px; line-height: 1.15; font-variant-numeric: tabular-nums }
+.health-card > span.muted { font-size: 13px }
+.health-card.clean { border-top-color: var(--good) } .health-card.issues { border-top-color: var(--warn) } .health-card.failed { border-top-color: var(--crit) }
+.health-icon { position: absolute; right: 14px; top: 14px; color: var(--muted) }
+.health-card.clean .health-icon { color: var(--good-text) } .health-card.issues .health-icon { color: var(--warn-text) } .health-card.failed .health-icon { color: var(--crit-text) }
+
+/* ---------- sources → unified flow ---------- */
+.flow-grid { display: grid; grid-template-columns: minmax(240px, 1.4fr) minmax(60px, 140px) minmax(210px, 1fr); align-items: center }
+.flow-lanes { list-style: none; margin: 0; padding: 0; display: grid }
+.flow-node { height: 100%; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: 10px; background: var(--surface-2); color: var(--ink); text-decoration: none; min-width: 0 }
+.flow-node:hover { border-color: var(--accent) }
+.flow-node.std { border-left-color: var(--series-base) } .flow-node.ok { border-left-color: var(--good) }
+.flow-node.todo { border-left-color: var(--warn); border-style: dashed solid dashed solid } .flow-node.bad { border-left-color: var(--crit) }
+.flow-node .source-icon { width: 32px; height: 32px }
+.flow-text { flex: 1; display: grid; min-width: 0 }
+.flow-text b, .flow-text small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.flow-text small { color: var(--muted); font-size: 12.5px }
+.flow-chip { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: var(--surface-3); color: var(--ink-2); white-space: nowrap }
+.flow-chip.std { background: var(--info-soft); color: var(--info-text) } .flow-chip.ok { background: var(--good-soft); color: var(--good-text) }
+.flow-chip.todo { background: var(--warn-soft); color: var(--warn-text) } .flow-chip.bad { background: var(--crit-soft); color: var(--crit-text) }
+.flow-links { width: 100%; display: block; overflow: visible }
+.flow-links path { fill: none; stroke-width: 2.5; vector-effect: non-scaling-stroke; stroke: var(--border-strong) }
+.flow-links path.std { stroke: var(--series-base) } .flow-links path.ok { stroke: var(--good) }
+.flow-links path.todo { stroke: var(--warn); stroke-dasharray: 5 5 } .flow-links path.bad { stroke: var(--crit) }
+.flow-target { display: grid; gap: 2px; align-content: center; border: 1px solid var(--border-strong); border-radius: 12px; padding: 14px 16px; background: var(--surface) }
+.flow-target.clean { box-shadow: inset 0 3px 0 var(--good) } .flow-target.issues { box-shadow: inset 0 3px 0 var(--warn) } .flow-target.failed { box-shadow: inset 0 3px 0 var(--crit) }
+.flow-target b { font-size: 16px }
+.flow-target hr { border: 0; border-top: 1px dashed var(--border-strong); width: 100%; margin: 8px 0 }
+.flow-target .actions { margin: 4px 0 }
+.flow-target > .button { justify-self: start; margin-top: 4px }
+.flow-status.clean { color: var(--good-text) } .flow-status.issues { color: var(--warn-text) } .flow-status.failed { color: var(--crit-text) }
+.flow-status { font-weight: 600 }
+
+/* ---------- trend chart ---------- */
+.trend .segmented .on { background: var(--accent-soft); color: var(--ink) }
+.trend svg { min-width: 420px }
+.trend .seg.critical { fill: var(--crit) } .trend .seg.warning { fill: var(--warn) } .trend .seg.info { fill: var(--info) } .trend .seg.clean { fill: var(--good) }
+.trend g { cursor: pointer }
+.trend g.dim .seg { opacity: .35 }
+.trend .status.clean { fill: var(--good) } .trend .status.issues { fill: var(--warn) } .trend .status.failed { fill: var(--crit) }
+.trend .rows-line { fill: none; stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 3 3; pointer-events: none }
+.sw.crit { background: var(--crit) } .sw.warn { background: var(--warn) } .sw.inf { background: var(--info) }
+.sw.line { height: 2px; background: var(--ink-2) }
+.trend .chart-legend { margin-top: 6px }
+
+/* ---------- their column → our column ---------- */
+.compare { display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: var(--surface) }
+.compare-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap }
+.compare-head .toggle { margin: 0 0 0 auto }
+.cmp-legend { display: flex; gap: 6px; flex-wrap: wrap }
+.cmp-grid { display: grid; gap: 6px; overflow-x: auto }
+.cmp-row { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(120px, 170px) minmax(150px, 1fr) minmax(190px, 1.2fr); gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: 10px; background: var(--surface-2); min-width: 700px }
+.cmp-row.head { background: none; border: 0; padding: 0 12px 0 16px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted) }
+.cmp-row.same { border-left-color: var(--good) }
+.cmp-row.renamed { border-left-color: var(--info); background: color-mix(in srgb, var(--info-soft) 55%, var(--surface-2)) }
+.cmp-row.converted { border-left-color: var(--ai); background: color-mix(in srgb, var(--ai-soft) 70%, var(--surface-2)) }
+.cmp-row.warning, .cmp-row.extra { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn-soft) 70%, var(--surface-2)) }
+.cmp-row.critical, .cmp-row.missing { border-left-color: var(--crit); background: color-mix(in srgb, var(--crit-soft) 70%, var(--surface-2)) }
+.cmp-row.dropped { opacity: .7 } .cmp-row.dropped code { text-decoration: line-through }
+.cmp-cell { display: grid; gap: 3px; min-width: 0 }
+.cmp-cell code { justify-self: start }
+.cmp-arrow { display: grid; justify-items: center; gap: 4px; color: var(--muted); padding-top: 2px }
+.cmp-steps { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px }
+.step-chip { font: 500 11.5px var(--mono); padding: 1px 7px; border-radius: 6px; background: var(--surface-3); color: var(--ink-2) }
+.step-chip.rename_column { background: var(--info-soft); color: var(--info-text) }
+.step-chip.scale_column, .step-chip.convert_to_number, .step-chip.standardize_categories, .step-chip.fill_missing { background: var(--ai-soft); color: var(--ai) }
+.pill.cmp-status { text-transform: none; letter-spacing: 0; background: var(--surface-3); color: var(--ink-2) }
+.pill.cmp-status.same { background: var(--good-soft); color: var(--good-text) }
+.pill.cmp-status.renamed { background: var(--info-soft); color: var(--info-text) }
+.pill.cmp-status.converted { background: var(--ai-soft); color: var(--ai) }
+.pill.cmp-status.missing { background: var(--crit-soft); color: var(--crit-text) }
+.samples { display: flex; flex-wrap: wrap; gap: 4px; font: 12px var(--mono); color: var(--ink-2) }
+.samples > * { background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.samples mark { background: var(--ai-soft); border-color: var(--ai); color: var(--ink) }
+small.hl { color: var(--warn-text); font-weight: 600; display: inline-flex; gap: 4px; align-items: center }
+.chip.hl { background: var(--warn-soft); color: var(--warn-text) }
+.tops { display: flex; flex-wrap: wrap; gap: 4px }
+.range { display: grid; gap: 3px }
+.range-row { position: relative; height: 8px; border-radius: 99px; background: var(--surface-3) }
+.range-row i { position: absolute; top: 0; bottom: 0; border-radius: 99px }
+.range-row i.base { background: var(--series-base) } .range-row i.new { background: var(--series-new) }
+.range-row em { position: absolute; top: -3px; width: 2px; height: 14px; background: var(--ink); transform: translateX(-1px); border-radius: 1px }
+.range small { display: flex; justify-content: space-between; font: 11px var(--mono); color: var(--muted) }
+.cmp-issues { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13.5px }
+.cmp-issues li { display: flex; gap: 8px; align-items: center }
+
+@media (max-width: 1000px) {
+  .health { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+  .flow-grid { grid-template-columns: 1fr; gap: 12px }
+  .flow-links { display: none }
+}

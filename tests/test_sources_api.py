@@ -112,6 +112,16 @@ def test_sources_flow_connect_map_pull_unify(client, sqlite_source, tmp_path):
         {"operation": "scale_column", "args": {"column": "amount", "factor": 0.01}, "reason": "r"},
         {"operation": "standardize_categories", "args": {"column": "status"}, "reason": "r"},
         {"operation": "drop_column", "args": {"column": "warehouse"}, "reason": "r"}]
+
+    names_only = {c["name"]: c for c in client.post(f"{base}/sources/{shop['id']}/compare", json={}).json()["columns"]}
+    assert names_only["amount"]["status"] == "missing" and names_only["order_id"]["source"] == "OrderID"
+    compared = client.post(f"{base}/sources/{shop['id']}/compare", json={"operations": recipe}).json()
+    columns = {c["name"]: c for c in compared["columns"]}
+    assert columns["amount"]["source"] == "amount_cents" and columns["amount"]["status"] == "converted"
+    assert columns["amount"]["after"]["mean"] == pytest.approx(columns["amount"]["standard"]["mean"], rel=1e-3)
+    assert compared["dropped"][0]["name"] == "warehouse" and compared["after"]["total"] < compared["before"]["total"]
+    bad = client.post(f"{base}/sources/{shop['id']}/compare", json={"operations": [{"operation": "exec", "args": {}}]})
+    assert bad.status_code == 422
     saved = client.put(f"{base}/sources/{shop['id']}/recipe", json={"operations": recipe}).json()
     assert saved["status"] == "mapped" and saved["proposal"] is None
 

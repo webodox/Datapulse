@@ -168,6 +168,35 @@ def test_ai_mapping_uses_statistics_only(standard):
     assert "ZZ-SECRET" not in fake.sent() and "C0102" not in fake.sent()
 
 
+def test_compare_shows_each_standard_column_with_its_source_and_rule_results(standard):
+    from datapulse.compare import compare_mapping
+
+    cfg, baseline = standard
+    shop = shop_shape(GOOD)
+    recipe = name_matches(list(shop.columns), list(GOOD.columns)) + [
+        {"operation": "rename_column", "args": {"column": "amount_cents", "new_name": "amount"}},
+        {"operation": "scale_column", "args": {"column": "amount", "factor": 0.01}},
+        {"operation": "drop_column", "args": {"column": "warehouse"}},
+        {"operation": "rename_column", "args": {"column": "gone", "new_name": "x"}},
+    ]
+    out = compare_mapping(shop, baseline, cfg, recipe)
+    columns = {c["name"]: c for c in out["columns"]}
+    assert list(columns) == list(GOOD.columns)
+    assert columns["order_id"]["source"] == "OrderID" and columns["order_id"]["status"] == "renamed"
+    assert columns["amount"]["status"] == "converted"
+    assert [s["operation"] for s in columns["amount"]["steps"]] == ["rename_column", "scale_column"]
+    assert columns["status"]["status"] == "flagged" and columns["status"]["issues"][0]["severity"] == "warning"
+    assert columns["status"]["after"]["samples"] == shop["STATUS"].head(3).tolist()
+    assert out["dropped"] == [{"name": "warehouse", "effect": "Removed the column 'warehouse'."}]
+    assert out["problems"][0].startswith("Step 10 (rename column) no longer applies")
+    assert out["after"]["total"] < out["before"]["total"]
+
+    cfg.report.show_values = False
+    hidden = compare_mapping(shop, baseline, cfg, [])
+    assert all(c["status"] == "missing" for c in hidden["columns"]) and len(hidden["extra"]) == len(shop.columns)
+    assert not any(e["after"]["samples"] for e in hidden["extra"]) and not hidden["show_values"]
+
+
 def test_combine_tags_rows_with_their_source():
     out = combine({"A": GOOD.head(2), "B": GOOD.head(3).drop(columns=["country"])}, list(GOOD.columns))
     assert out[SOURCE_COLUMN].tolist() == ["A", "A", "B", "B", "B"] and out["country"].isna().sum() == 3

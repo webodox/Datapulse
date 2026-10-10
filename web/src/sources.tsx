@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { api, plural, timeAgo, type Mapping, type ProjectDetail, type Run, type Source, type SourceKind, type Step } from './api'
+import { api, plural, runTone, timeAgo, type Mapping, type ProjectDetail, type Run, type Source, type SourceKind, type Step } from './api'
+import { FlowDiagram, HealthCards, lastCheckOf, MappingCompare, TrendChart } from './flow'
 import { Icon, type IconName } from './icons'
 import { Empty, Modal, Spinner, useAction, useNotify } from './ui'
 
@@ -82,15 +83,10 @@ export function SourcesTab({ detail, changed, ai, openRun }:
       </div>
     </div>
 
-    {lastUnified && <div className={`card unified-latest ${lastUnified.status}`}>
-      <span className="source-icon"><Icon name="database" size={18} /></span>
-      <div>
-        <b>Unified table · {lastUnified.report.rows.current.toLocaleString()} rows from {plural(lastUnified.report.unified!.sources.filter(x => !x.error).length, 'source')}</b>
-        <small className="muted">{timeAgo(lastUnified.created_at)} · {lastUnified.issue_count ? plural(lastUnified.issue_count, 'issue') + ' to review' : 'all checks passed'}</small>
-      </div>
-      <button className="button ghost" onClick={() => openRun(lastUnified.id)}>Open report</button>
-      <a className="button outline" href={api.runDataUrl(detail.id, lastUnified.id)}><Icon name="download" size={14} /> Download</a>
-    </div>}
+    <HealthCards detail={detail} sources={list} />
+    {list.length > 0 && <FlowDiagram detail={detail} sources={list} icon={k => KIND_ICON[k] || 'database'} openRun={openRun}
+      unify={unify} unifying={busy === 'unify'} canUnify={ready.length > 0} />}
+    <TrendChart runs={detail.runs} openRun={openRun} />
 
     {list.length === 0 ? <Empty icon="plug" title="No sources yet">
       <span>Any database, a file, a link, a REST API, Google Drive or a web page. Use test data to try one without your own credentials.</span>
@@ -108,7 +104,9 @@ function SourceCard({ source: s, kinds, detail, ai, refresh, edit, openRun }:
   { source: Source; kinds: SourceKind[]; detail: ProjectDetail; ai: boolean; refresh: () => Promise<unknown>; edit: () => void; openRun: (run?: string) => void }) {
   const notify = useNotify()
   const [busy, act] = useAction()
+  const [comparing, setComparing] = useState(false)
   const status = STATUS[s.status]
+  const lastRun = lastCheckOf(detail, s)
   const pull = (role: 'baseline' | 'candidate') => act(role, async () => {
     if (role === 'baseline' && detail.has_baseline && !window.confirm(`Make "${s.name}" the new standard? Other sources' recipes may need re-mapping.`)) return
     const report = await api.pullSource(detail.id, s.id, role)
@@ -122,17 +120,19 @@ function SourceCard({ source: s, kinds, detail, ai, refresh, edit, openRun }:
     act('remove', async () => { await api.removeSource(detail.id, s.id); await refresh() })
   }
 
-  return <article className="card source">
+  return <article className="card source" id={`source-${s.id}`}>
     <header>
       <span className="source-icon"><Icon name={KIND_ICON[s.kind] || 'database'} size={18} /></span>
       <div>
         <h3>{s.name}</h3>
-        <small className="muted">{s.type || labelOf(kinds, s.kind)}{s.last_pulled_at ? ` · pulled ${timeAgo(s.last_pulled_at)}` : ' · never pulled'}</small>
+        <small className="muted">{s.type || labelOf(kinds, s.kind)}{s.last_pulled_at ? ` · pulled ${timeAgo(s.last_pulled_at)}` : ' · never pulled'}
+          {lastRun && <> · last check <span className={`flow-status ${runTone(lastRun)}`}>{lastRun.issue_count ? plural(lastRun.issue_count, 'issue') : 'passed'}</span></>}</small>
       </div>
       <span className={`pill verdict ${status.tone}`}>{status.label}{s.status === 'mapped' && s.recipe.length > 0 && ` · ${plural(s.recipe.length, 'step')}`}</span>
     </header>
 
     {s.proposal && <MappingReview proposal={s.proposal} projectId={detail.id} source={s} refresh={refresh} />}
+    {!s.proposal && comparing && <MappingCompare projectId={detail.id} source={s} operations={s.recipe} />}
 
     <div className="actions">
       {s.proposal ? null : !detail.has_baseline ? <button className="button primary" disabled={!!busy} onClick={() => pull('baseline')}>
@@ -143,6 +143,8 @@ function SourceCard({ source: s, kinds, detail, ai, refresh, edit, openRun }:
           {busy === 'candidate' ? <Spinner text="Pulling…" /> : 'Pull & check'}</button>}
       {s.last_run_id && <button className="button ghost" onClick={() => openRun(s.last_run_id!)}>Last check</button>}
       {s.status === 'mapped' && <button className="button ghost" disabled={!!busy} onClick={map}>{busy === 'map' ? <Spinner text="Mapping…" /> : 'Re-map'}</button>}
+      {!s.proposal && detail.has_baseline && s.status !== 'standard' && <button className="button ghost" onClick={() => setComparing(c => !c)}>
+        {comparing ? 'Hide columns' : 'Compare columns'}</button>}
       {detail.has_baseline && s.status !== 'standard' && <button className="button ghost" disabled={!!busy} onClick={() => pull('baseline')}>Make standard</button>}
       <span className="spacer" />
       <button className="button ghost" onClick={edit}>Edit</button>
@@ -179,6 +181,8 @@ function MappingReview({ proposal: p, projectId, source, refresh }: { proposal: 
       <div><small>Rows</small><b>{p.rows.before.toLocaleString()} <span>→</span> {p.rows.after.toLocaleString()}</b></div>
     </div>
     <p>{p.summary}</p>
+    <h4>Their column → our column · updates as you choose steps</h4>
+    <MappingCompare projectId={projectId} source={source} operations={chosen.map(({ effect: _effect, ...step }) => step)} />
     <h4>Steps · uncheck any you don't want</h4>
     <ul className="recipe">{p.operations.map((op, i) => <li key={i}>
       <label><input type="checkbox" checked={keep[i]} onChange={e => setKeep(k => k.map((v, j) => j === i ? e.target.checked : v))} />
