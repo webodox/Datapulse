@@ -94,3 +94,11 @@ def test_comment_command_uses_event_context(tmp_path, monkeypatch, runner):
     assert r.exit_code == 0 and got == {"repo": "o/r", "pr": 42, "token": "t"}
     monkeypatch.delenv("GITHUB_TOKEN")
     assert runner.invoke(app, ["comment", str(report)]).exit_code == 2
+
+
+def test_workspace_header_is_sent_only_when_configured(cfg, monkeypatch):
+    monkeypatch.setenv(cfg.ai.api_key_env, "k")
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    assert "anthropic-workspace-id" not in ai.get_client(cfg).default_headers
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_123")
+    assert ai.get_client(cfg).default_headers["anthropic-workspace-id"] == "wrkspc_123"

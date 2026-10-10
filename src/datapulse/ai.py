@@ -71,7 +71,10 @@ def get_client(cfg: Config):
     base_url = os.environ.get("DATAPULSE_AI_URL")  # e.g. a company proxy in front of the Anthropic API
     if base_url and base_url.rstrip("/").endswith("/v1/messages"):  # older docs gave the full endpoint
         base_url = base_url.rstrip("/")[: -len("/v1/messages")]
-    return anthropic.Anthropic(api_key=key, base_url=base_url or None, timeout=120.0, max_retries=2)
+    # Organization-level keys must name a workspace on every request; workspace-scoped keys don't need this.
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
+    return anthropic.Anthropic(api_key=key, base_url=base_url or None, timeout=120.0, max_retries=2,
+                               default_headers={"anthropic-workspace-id": workspace} if workspace else None)
 
 
 def create(client, cfg: Config, **params):
