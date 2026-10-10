@@ -122,6 +122,21 @@ the same projects, checks and AI triage, and only that one server needs an `ANTH
 4. On a failed check, anyone can set **Open / Acknowledged / Resolved**; the dashboard shows who did it and when,
    who ran each check, and who requested each AI triage.
 
+### Deploying to the cloud (one permanent link for everyone)
+
+`Dockerfile.app` packages the dashboard and the API into one container on one port, with all data (accounts,
+projects, checks) on a volume at `/data`. `railway.json` configures [Railway](https://railway.com) to use it:
+
+1. In Railway: **New Project → Deploy from GitHub repo** → pick this repository (and the branch to deploy).
+2. On the service, open **Variables** and add `ANTHROPIC_API_KEY` (your key) and `DATAPULSE_SECURE_COOKIES=1`.
+   Add `ANTHROPIC_WORKSPACE_ID` only if your key isn't tied to a workspace.
+3. Right-click the service → **Attach volume**, mount path `/data`. Without it, data is lost on every redeploy.
+4. **Settings → Networking → Generate Domain**. Open that `https://...up.railway.app` link; the first person to open
+   it creates the admin account, then adds teammates under **Account & team**.
+
+Every push to the deployed branch redeploys automatically. Any other host that runs a Dockerfile and offers a
+persistent volume works the same way (Fly.io, Render with a disk, a VM with `docker run -p 80:8000 -v dp:/data`).
+
 Every `/api` route needs a signed-in user except `/api/health`, sign-in itself, and `/ingest`, which uses the
 project's API key so other services can send data. Passwords are stored as scrypt hashes; sessions are HttpOnly
 cookies that last 14 days. If the dashboard is reachable from the internet, serve it over HTTPS (for example behind

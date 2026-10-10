@@ -419,3 +419,11 @@ def get_run(project_id: str, run_id: str) -> dict:
     if row is None:
         raise HTTPException(404, "Run not found")
     return json.loads(row["report_json"])
+
+
+# Single-container deployments (Dockerfile.app) serve the built dashboard from the same address as the API.
+# Registered last, so /api and /docs keep precedence.
+if os.getenv("DATAPULSE_WEB_DIR") and Path(os.environ["DATAPULSE_WEB_DIR"]).is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=os.environ["DATAPULSE_WEB_DIR"], html=True), name="dashboard")
