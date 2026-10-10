@@ -1,3 +1,6 @@
+import sqlite3
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -52,3 +55,21 @@ def baseline(tmp_path, df, cfg):
 @pytest.fixture
 def runner() -> CliRunner:
     return CliRunner()
+
+
+def shop_shape(df: pd.DataFrame) -> pd.DataFrame:
+    """The same orders as another system stores them: other names, cents, capitals, an extra column."""
+    return pd.DataFrame({"OrderID": df.order_id + 50_000, "Customer ID": df.customer_id, "STATUS": df.status.str.upper(),
+                         "amount_cents": (df.amount * 100).round(), "Quantity": df.quantity, "Country": df.country,
+                         "Created_At": df.created_at, "warehouse": "W1"})
+
+
+@pytest.fixture
+def sqlite_source(tmp_path, monkeypatch):
+    """The example orders in shop_shape, as a SQLite data source."""
+    monkeypatch.setenv("DATAPULSE_SQLITE_DIR", str(tmp_path))
+    path = tmp_path / "shop.db"
+    with sqlite3.connect(path) as db:
+        shop_shape(pd.read_csv(Path(__file__).resolve().parents[1] / "examples/data/orders.csv")).to_sql(
+            "store_orders", db, index=False)
+    return {"path": str(path), "query": "store_orders"}

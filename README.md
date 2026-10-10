@@ -15,8 +15,8 @@ likely causes, writes the fix checklist and drafts the message to the people aff
 | Feature | What it takes off your plate | Where | Needs |
 |---|---|---|---|
 | ML drift model (`ml_drift` check) | Spotting subtle or multi-column drift and pointing at the columns responsible | Dashboard (automatic), `check --reference good.csv` | nothing; runs locally |
-| AI triage agent | The first hour of an incident: root cause, block-or-ship call, fix steps, who to tell, the message | Dashboard **Triage with AI**, `check --triage` | `ANTHROPIC_API_KEY` |
-| AI repair agent | The fix itself: rescales units, converts text back to numbers, removes duplicates, standardizes spellings; then re-runs every check to prove it worked | Dashboard **Fix with AI** (download the repaired copy), `datapulse fix data.csv -o fixed.csv` | `ANTHROPIC_API_KEY` |
+| Investigate with AI | One button, two agents in parallel. The triage agent handles the first hour of an incident (root cause, block-or-ship call, fix steps, who to tell, the message); the repair agent fixes a copy (rescales units, converts text back to numbers, removes duplicates, standardizes spellings) and re-runs every check to prove it worked | Dashboard **Investigate with AI**, `check --triage`, `datapulse fix data.csv -o fixed.csv` | `ANTHROPIC_API_KEY` |
+| AI source mapping | Converting each new data source to your standard format: renamed columns, other units, numbers stored as text, different spellings. Approved once, then replayed on every load without AI | Dashboard **Sources** tab | `ANTHROPIC_API_KEY` (name matching works without it) |
 | Before/after charts | Seeing a shift instantly: each column's value ranges and empty rates, baseline vs. new file | Dashboard, on each issue | nothing |
 | Rules assistant | Writing and debugging YAML; drafts are validated and self-corrected before you see them | Dashboard Rules tab, `datapulse draft-rules "..."` | `ANTHROPIC_API_KEY` |
 | Issue explanations | A hedged hypothesis per issue | `check --ai`, dashboard toggle | `ANTHROPIC_API_KEY` |
@@ -47,6 +47,34 @@ values and example values are never sent; tests enforce this for each feature. T
 **Setting the key.** CLI: `export ANTHROPIC_API_KEY=...` (PowerShell: `$env:ANTHROPIC_API_KEY="..."`). Docker:
 copy `.env.example` to `.env`, put your key in it, then `docker compose up --build`. The model is `ai.model` in
 `datapulse.yml` (default `claude-sonnet-5-5`); `DATAPULSE_AI_URL` points the client at a proxy.
+
+## Data sources and unified data
+
+The **Sources** tab connects a project to where its data lives, so nobody downloads and uploads files:
+
+| Group | Sources |
+|---|---|
+| Databases | PostgreSQL (also Supabase, Neon, Railway, RDS, Redshift), MySQL / MariaDB, Microsoft SQL Server / Azure SQL, MongoDB (also Atlas, DocumentDB, Cosmos DB), SQLite, and any other database with a SQLAlchemy driver (Snowflake, BigQuery, Oracle, Databricks…) |
+| Files & links | Any CSV, JSON or Parquet link, including Google Sheets share links |
+
+**How unifying works.** One source is the *standard*: its format (columns, types, value scales) becomes the
+project's baseline. Every other source is mapped onto it once. Columns whose names match apart from case and
+punctuation are mapped automatically; the AI proposes the rest (renames, unit changes such as cents to dollars,
+numbers stored as text, capitalisation) from statistics only, using the same safe operations as the repair agent.
+A person reviews the steps and approves them. From then on every pull replays that recipe with no AI, checks the
+result, and **Unify** combines all sources into one table (with a `_source` column) you can download. If a source
+changes shape so a step no longer applies, the run says so instead of guessing.
+
+**Safety.** Connection URLs and passwords stay in the server's database and are never sent back to the browser or
+shown in error messages. Queries are read-only: a table name becomes `SELECT * FROM table`, anything else must be
+one `SELECT` query, and it runs in a transaction that is rolled back (marked read-only on PostgreSQL). Use a
+read-only database user anyway. Links must be public `https://` addresses. SQLite files must sit in the folder
+named by `DATAPULSE_SQLITE_DIR`. At most `DATAPULSE_MAX_SOURCE_ROWS` rows (default 200,000) are read per pull.
+
+**Adding a source type** is one file in `src/datapulse/sources/`: a class with the `fields` its form needs, a
+`test()` and a `fetch()` that returns a table, decorated with `@register`. It appears in the dashboard
+automatically. See `link.py` for the smallest example and `base.py` for the contract. The drivers install with
+`pip install -e ".[sources]"` (the Docker images include them).
 
 ## Recognizing projects in any language
 

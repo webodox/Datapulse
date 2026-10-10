@@ -71,6 +71,20 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sources (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    settings_json TEXT NOT NULL,       -- includes secrets; never returned to the browser
+    recipe_json TEXT,                  -- approved mapping steps (NULL: not mapped yet)
+    proposal_json TEXT,                -- the latest AI mapping proposal, waiting for review
+    is_standard INTEGER NOT NULL DEFAULT 0,  -- this source's data defines the project's standard format
+    last_pulled_at TEXT,
+    last_run_id TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

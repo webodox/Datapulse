@@ -12,6 +12,7 @@ import os
 import secrets
 import sqlite3
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
@@ -24,28 +25,21 @@ from pydantic import BaseModel, Field
 
 from datapulse import __version__
 from datapulse.agent import TriageContext, run_triage
-from datapulse.ai import draft_rules, explain_issues, get_api_key
-from datapulse.baseline import build_baseline, describe
-from datapulse.checks import run_checks
-from datapulse.config import STARTER_CONFIG, Config, parse_config_text
+from datapulse.ai import draft_rules, get_api_key
+from datapulse.config import STARTER_CONFIG, Config
 from datapulse.errors import DataPulseError
 from datapulse.fix import RepairSession, run_repair
-from datapulse.io import SUPPORTED, load_dataframe
-from datapulse.profile import chart_data, profile_dataframe
-from datapulse.report import render_json, render_markdown
+from datapulse.io import load_dataframe
+from datapulse.profile import profile_dataframe
 from datapulse.suggest import render_yaml, suggest_rules
+from datapulse.unify import SOURCE_COLUMN
 
 from .auth import current_user, needs_login, router as auth_router
+from .core import (MAX_INGEST_ROWS, MAX_UPLOAD_BYTES, ROOT, ai_call, baseline_summary, dataset_rows, handle_data,
+                   loads, project_config, project_row, record_dataset, run_check, save_baseline, save_upload,
+                   load_upload)
 from .db import connect, init_db, now_iso, upload_dir
-
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-MAX_INGEST_ROWS = 50_000
-ROOT = Path(__file__).resolve().parents[1]
-CONFIG_LABEL = "project config (dashboard)"
-
-
-def _loads(text: Optional[str]) -> Any:
-    return json.loads(text) if text else None
+from .sources import router as sources_router
 
 
 @asynccontextmanager
@@ -64,6 +58,7 @@ app.add_middleware(
     allow_credentials=True,
 )
 app.include_router(auth_router)
+app.include_router(sources_router)
 
 
 @app.middleware("http")
@@ -97,119 +92,6 @@ class IngestRows(BaseModel):
     role: Literal["baseline", "candidate"] = "candidate"
     rows: list[dict] = Field(min_length=1, max_length=MAX_INGEST_ROWS)
     use_ai: bool = False
-
-
-def _project(project_id: str) -> sqlite3.Row:
-    with connect() as db:
-        row = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-    if row is None:
-        raise HTTPException(404, "Project not found")
-    return row
-
-
-def _config(text: str) -> Config:
-    try:
-        return parse_config_text(text, CONFIG_LABEL)
-    except DataPulseError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
-def _save_upload(filename: str, content: bytes) -> Path:
-    suffix = Path(filename).suffix.lower()
-    if suffix not in SUPPORTED:
-        raise HTTPException(415, "Supported data files: CSV, JSON, JSONL/NDJSON, and Parquet")
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "Upload exceeds the 25 MB limit")
-    path = upload_dir() / f"{uuid.uuid4().hex}{suffix}"
-    path.write_bytes(content)
-    return path
-
-
-def _load(path: Path) -> pd.DataFrame:
-    try:
-        return load_dataframe(path)
-    except DataPulseError as exc:
-        # Report the problem without exposing the server-side storage path.
-        raise HTTPException(400, str(exc).replace(str(path), "the uploaded file")) from exc
-
-
-def _record_dataset(project_id: str, name: str, path: Path, role: str, df: pd.DataFrame) -> str:
-    dataset_id = uuid.uuid4().hex[:12]
-    with connect() as db:
-        db.execute("INSERT INTO datasets VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                   (dataset_id, project_id, name, str(path), role, len(df), json.dumps(list(df.columns)), now_iso()))
-    return dataset_id
-
-
-def _baseline_summary(data: Dict[str, Any]) -> Dict[str, Any]:
-    """What the dashboard shows about a baseline: aggregates only, no category values or histograms."""
-    prof = data["profile"]
-    return {
-        "baseline_version": data.get("baseline_version", 1),
-        "created_at": data.get("created_at"),
-        "source": data.get("source", {}).get("file"),
-        "rows": prof["rows"],
-        "columns": {name: {k: info.get(k) for k in ("kind", "dtype", "null_rate", "unique_count")}
-                    for name, info in prof["columns"].items()},
-    }
-
-
-def _save_baseline(project: sqlite3.Row, name: str, path: Path, df: pd.DataFrame) -> Dict[str, Any]:
-    if len(df) == 0:
-        raise HTTPException(400, f"{name} has no rows; a baseline needs data.")
-    cfg = _config(project["config_yaml"])
-    previous = _loads(project["baseline_json"])
-    version = previous["baseline_version"] + 1 if previous else 1
-    data = build_baseline(df, path, version, cfg.max_categories)
-    data["source"]["file"] = name  # the name the user knows, not the storage path
-    dataset_id = _record_dataset(project["id"], name, path, "baseline", df)
-    with connect() as db:
-        db.execute("UPDATE projects SET baseline_json = ?, baseline_dataset_id = ? WHERE id = ?",
-                   (json.dumps(data), dataset_id, project["id"]))
-    return {"dataset_id": dataset_id, "role": "baseline", "baseline": _baseline_summary(data)}
-
-
-def _dataset_rows(dataset_id: Optional[str]) -> Optional[pd.DataFrame]:
-    """A stored dataset's rows, or None when the file is gone (older projects, cleaned-up uploads)."""
-    with connect() as db:
-        row = db.execute("SELECT filename FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
-    try:
-        return load_dataframe(row["filename"]) if row else None
-    except DataPulseError:
-        return None
-
-
-def _run_check(project: sqlite3.Row, name: str, path: Path, df: pd.DataFrame, use_ai: bool,
-               actor: str) -> Dict[str, Any]:
-    if not project["baseline_json"]:
-        raise HTTPException(409, "Create a baseline dataset before running a check")
-    cfg = _config(project["config_yaml"])
-    baseline = json.loads(project["baseline_json"])
-    report = run_checks(baseline, df, cfg, data_file=name, baseline_label=describe(baseline, "project baseline"),
-                        config_label=CONFIG_LABEL, reference=_dataset_rows(project["baseline_dataset_id"]))
-    ai_note = explain_issues(report, cfg) if use_ai else ""
-    doc = json.loads(render_json(report))
-    dataset_id = _record_dataset(project["id"], name, path, "candidate", df)
-    run_id = uuid.uuid4().hex[:12]
-    doc.update(run_id=run_id, ai_note=ai_note or None, markdown=render_markdown(report),
-               charts=chart_data(baseline["profile"], df))
-    with connect() as db:
-        db.execute("INSERT INTO runs (id, project_id, dataset_id, status, issue_count, report_json, created_at, "
-                   "created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (run_id, project["id"], dataset_id, doc["status"],
-                                                                 len(doc["issues"]), json.dumps(doc), now_iso(), actor))
-    return doc
-
-
-def _handle(project_id: str, name: str, path: Path, role: str, actor: str, use_ai: bool = False) -> Dict[str, Any]:
-    try:
-        project = _project(project_id)
-        df = _load(path)
-        if role == "baseline":
-            return _save_baseline(project, name, path, df)
-        return _run_check(project, name, path, df, use_ai, actor)
-    except HTTPException:
-        path.unlink(missing_ok=True)  # rejected uploads are not kept
-        raise
 
 
 @app.get("/api/health")
@@ -252,19 +134,19 @@ def create_project(payload: CreateProject) -> dict:
 
 @app.get("/api/projects/{project_id}")
 def get_project(project_id: str) -> dict:
-    project = _project(project_id)
+    project = project_row(project_id)
     with connect() as db:
         datasets = db.execute("SELECT id, name, role, row_count, columns_json, created_at FROM datasets "
                               "WHERE project_id = ? ORDER BY created_at DESC, rowid DESC", (project_id,)).fetchall()
         runs = db.execute("SELECT id, status, issue_count, created_at, report_json, created_by, review_status, "
                           "review_by, review_at FROM runs "
                           "WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 30", (project_id,)).fetchall()
-    baseline = _loads(project["baseline_json"])
-    cfg = _config(project["config_yaml"])
+    baseline = loads(project["baseline_json"])
+    cfg = project_config(project["config_yaml"])
     return {
         "id": project["id"], "name": project["name"], "created_at": project["created_at"],
         "has_baseline": baseline is not None,
-        "baseline": _baseline_summary(baseline) if baseline else None,
+        "baseline": baseline_summary(baseline) if baseline else None,
         "config_yaml": project["config_yaml"],
         "fail_on": cfg.fail_on,
         "consumers": [{"name": c.name, "type": c.type, "owner": c.owner, "columns": c.columns} for c in cfg.consumers],
@@ -279,8 +161,8 @@ def get_project(project_id: str) -> dict:
 
 @app.put("/api/projects/{project_id}/config")
 def update_config(project_id: str, payload: SaveConfig) -> dict:
-    _project(project_id)
-    _config(payload.config_yaml)  # the CLI's strict validation; rejects unknown keys and bad values
+    project_row(project_id)
+    project_config(payload.config_yaml)  # the CLI's strict validation; rejects unknown keys and bad values
     with connect() as db:
         db.execute("UPDATE projects SET config_yaml = ? WHERE id = ?", (payload.config_yaml, project_id))
     return {"saved": True}
@@ -289,7 +171,7 @@ def update_config(project_id: str, payload: SaveConfig) -> dict:
 @app.get("/api/projects/{project_id}/suggestions")
 def suggestions(project_id: str) -> dict:
     """Rules proposed from the baseline profile, as YAML to review. Nothing is applied."""
-    project = _project(project_id)
+    project = project_row(project_id)
     if not project["baseline_json"]:
         raise HTTPException(409, "Create a baseline dataset first; suggestions are learned from it")
     return {"yaml": render_yaml(suggest_rules(json.loads(project["baseline_json"])["profile"]))}
@@ -297,9 +179,9 @@ def suggestions(project_id: str) -> dict:
 
 async def _upload(request: Request, project_id: str, file: UploadFile, name: Optional[str], role: str,
                   use_ai: bool = False) -> dict:
-    _project(project_id)
-    path = _save_upload(file.filename or "", await file.read(MAX_UPLOAD_BYTES + 1))
-    return _handle(project_id, name or file.filename or role, path, role, request.state.user["name"], use_ai)
+    project_row(project_id)
+    path = save_upload(file.filename or "", await file.read(MAX_UPLOAD_BYTES + 1))
+    return handle_data(project_id, name or file.filename or role, path, role, request.state.user["name"], use_ai)
 
 
 @app.post("/api/projects/{project_id}/baseline")
@@ -317,12 +199,13 @@ async def upload_candidate(request: Request, project_id: str, file: UploadFile =
 @app.delete("/api/projects/{project_id}")
 def delete_project(project_id: str) -> dict:
     """Delete a project with its datasets, runs and uploaded files (files outside the upload folder are kept)."""
-    _project(project_id)
+    project_row(project_id)
     uploads = upload_dir()
     with connect() as db:
         files = [Path(r["filename"]) for r in db.execute("SELECT filename FROM datasets WHERE project_id = ?",
                                                           (project_id,))]
-        for table, column in (("runs", "project_id"), ("datasets", "project_id"), ("projects", "id")):
+        for table, column in (("runs", "project_id"), ("sources", "project_id"), ("datasets", "project_id"),
+                              ("projects", "id")):
             db.execute(f"DELETE FROM {table} WHERE {column} = ?", (project_id,))
     for f in files:
         if f.parent == uploads:
@@ -333,7 +216,7 @@ def delete_project(project_id: str) -> dict:
 @app.post("/api/projects/{project_id}/ingest")
 def ingest_rows(project_id: str, payload: IngestRows, x_datapulse_key: Optional[str] = Header(None)) -> dict:
     """Send rows as JSON from any language. Requires the project's X-DataPulse-Key."""
-    project = _project(project_id)
+    project = project_row(project_id)
     if not x_datapulse_key or not secrets.compare_digest(
             hashlib.sha256(x_datapulse_key.encode()).hexdigest(), project["api_key_hash"]):
         raise HTTPException(401, "A valid X-DataPulse-Key header is required")
@@ -342,7 +225,7 @@ def ingest_rows(project_id: str, payload: IngestRows, x_datapulse_key: Optional[
         raise HTTPException(413, "JSON batch exceeds the 25 MB limit")
     path = upload_dir() / f"{uuid.uuid4().hex}.jsonl"
     path.write_text(body + "\n", encoding="utf-8")
-    return _handle(project_id, payload.dataset_name, path, payload.role, "API", payload.use_ai)
+    return handle_data(project_id, payload.dataset_name, path, payload.role, "API", payload.use_ai)
 
 
 @app.post("/api/demo/seed")
@@ -351,45 +234,8 @@ def seed_demo() -> dict:
     sample = ROOT / "examples" / "data" / "orders.csv"
     config_text = (ROOT / "examples" / "datapulse.yml").read_text(encoding="utf-8")
     project = _create_project("Orders pipeline", config_text)
-    _save_baseline(_project(project["id"]), sample.name, sample, load_dataframe(sample))
+    save_baseline(project_row(project["id"]), sample.name, sample, load_dataframe(sample))
     return {**project, "has_baseline": True}
-
-
-def _ai(call):
-    """Run an AI feature; configuration and upstream problems become readable HTTP errors."""
-    try:
-        return call()
-    except DataPulseError as exc:
-        raise HTTPException(503 if "environment variable" in str(exc) else 502, str(exc)) from exc
-
-
-@app.post("/api/projects/{project_id}/runs/{run_id}/triage")
-def triage_run(project_id: str, run_id: str, request: Request) -> dict:
-    """Let the AI triage agent investigate a run and write the incident note. Saved with the run."""
-    project = _project(project_id)
-    with connect() as db:
-        run = db.execute("SELECT dataset_id, report_json FROM runs WHERE id = ? AND project_id = ?",
-                         (run_id, project_id)).fetchone()
-        history = db.execute("SELECT created_at, status, issue_count, report_json FROM runs WHERE project_id = ? "
-                             "AND id != ? ORDER BY created_at DESC, rowid DESC LIMIT 15", (project_id, run_id)).fetchall()
-    if run is None:
-        raise HTTPException(404, "Run not found")
-    doc = json.loads(run["report_json"])
-    if not doc["issues"]:
-        raise HTTPException(409, "This run passed cleanly; there is nothing to triage")
-    cfg = _config(project["config_yaml"])
-    current = _dataset_rows(run["dataset_id"])
-    ctx = TriageContext(
-        doc, json.loads(project["baseline_json"])["profile"],
-        profile_dataframe(current, cfg.max_categories) if current is not None else None,
-        history=[{"when": h["created_at"], "status": h["status"], "issue_count": h["issue_count"],
-                  "failing": sorted({f"{i['check']}:{','.join(i['columns'])}" for i in json.loads(h["report_json"])["issues"]})}
-                 for h in history],
-        consumers=[vars(c) for c in cfg.consumers])
-    doc["triage"] = {**_ai(lambda: run_triage(ctx, cfg)), "by": request.state.user["name"], "at": now_iso()}
-    with connect() as db:
-        db.execute("UPDATE runs SET report_json = ? WHERE id = ?", (json.dumps(doc), run_id))
-    return doc["triage"]
 
 
 def _run_row(project_id: str, run_id: str) -> sqlite3.Row:
@@ -398,6 +244,106 @@ def _run_row(project_id: str, run_id: str) -> sqlite3.Row:
     if run is None:
         raise HTTPException(404, "Run not found")
     return run
+
+
+def _failed_run(project_id: str, run_id: str) -> tuple:
+    run = _run_row(project_id, run_id)
+    doc = json.loads(run["report_json"])
+    if not doc["issues"]:
+        raise HTTPException(409, "This run passed cleanly; there is nothing to investigate")
+    return run, doc
+
+
+def _run_data(run: sqlite3.Row) -> Optional[pd.DataFrame]:
+    """The checked data of a run, without the _source tag a unified table carries."""
+    df = dataset_rows(run["dataset_id"])
+    return None if df is None else df.drop(columns=[SOURCE_COLUMN], errors="ignore")
+
+
+def _triage(project: sqlite3.Row, run: sqlite3.Row, doc: Dict[str, Any]) -> Dict[str, Any]:
+    """The triage agent's incident note for a failed run."""
+    with connect() as db:
+        history = db.execute("SELECT created_at, status, issue_count, report_json FROM runs WHERE project_id = ? "
+                             "AND id != ? ORDER BY created_at DESC, rowid DESC LIMIT 15",
+                             (project["id"], run["id"])).fetchall()
+    cfg = project_config(project["config_yaml"])
+    current = _run_data(run)
+    ctx = TriageContext(
+        doc, json.loads(project["baseline_json"])["profile"],
+        profile_dataframe(current, cfg.max_categories) if current is not None else None,
+        history=[{"when": h["created_at"], "status": h["status"], "issue_count": h["issue_count"],
+                  "failing": sorted({f"{i['check']}:{','.join(i['columns'])}" for i in json.loads(h["report_json"])["issues"]})}
+                 for h in history],
+        consumers=[vars(c) for c in cfg.consumers])
+    return run_triage(ctx, cfg)
+
+
+def _repair(project: sqlite3.Row, run: sqlite3.Row, doc: Dict[str, Any]) -> Dict[str, Any]:
+    """The repair agent's fixed copy of a failed run, saved as a dataset. The original is never changed."""
+    df = _run_data(run)
+    if df is None:
+        raise DataPulseError("The file for this check is no longer stored, so it can't be repaired")
+    session = RepairSession(df, json.loads(project["baseline_json"]), project_config(project["config_yaml"]),
+                            reference=dataset_rows(project["baseline_dataset_id"]))
+    result = run_repair(session)
+    fixed = result.pop("fixed_frame")
+    stem = Path(doc.get("data_file") or "data").stem
+    path = upload_dir() / f"{uuid.uuid4().hex}.csv"
+    fixed.to_csv(path, index=False)
+    dataset_id = record_dataset(project["id"], f"{stem} (fixed).csv", path, "fixed", fixed)
+    return {**result, "dataset_id": dataset_id, "file_name": f"{stem}-fixed.csv"}
+
+
+AGENTS = {"triage": _triage, "fix": _repair}
+
+
+def _save_report(run_id: str, doc: Dict[str, Any]) -> None:
+    with connect() as db:
+        db.execute("UPDATE runs SET report_json = ? WHERE id = ?", (json.dumps(doc), run_id))
+
+
+def _one_agent(project_id: str, run_id: str, request: Request, name: str) -> dict:
+    project = project_row(project_id)
+    run, doc = _failed_run(project_id, run_id)
+    doc[name] = {**ai_call(lambda: AGENTS[name](project, run, doc)), "by": request.state.user["name"], "at": now_iso()}
+    _save_report(run_id, doc)
+    return doc[name]
+
+
+@app.post("/api/projects/{project_id}/runs/{run_id}/investigate")
+def investigate_run(project_id: str, run_id: str, request: Request) -> dict:
+    """Investigate with AI: the triage agent diagnoses the run while the repair agent fixes a copy, in parallel.
+
+    Parts already done are kept. If one agent fails the other's result is still saved and the error is returned.
+    """
+    project = project_row(project_id)
+    run, doc = _failed_run(project_id, run_id)
+    todo = [name for name in AGENTS if not doc.get(name)]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {name: pool.submit(AGENTS[name], project, run, doc) for name in todo}
+    errors = {}
+    for name, future in futures.items():
+        try:
+            doc[name] = {**future.result(), "by": request.state.user["name"], "at": now_iso()}
+        except DataPulseError as exc:
+            errors[name] = str(exc)
+    if todo and len(errors) == len(todo):
+        detail = "; ".join(dict.fromkeys(errors.values()))
+        raise HTTPException(503 if "environment variable" in detail else 502, detail)
+    _save_report(run_id, doc)
+    return {"triage": doc.get("triage"), "fix": doc.get("fix"), "errors": errors}
+
+
+@app.post("/api/projects/{project_id}/runs/{run_id}/triage")
+def triage_run(project_id: str, run_id: str, request: Request) -> dict:
+    """Only the triage agent's incident note (the dashboard uses /investigate)."""
+    return _one_agent(project_id, run_id, request, "triage")
+
+
+@app.post("/api/projects/{project_id}/runs/{run_id}/fix")
+def fix_run(project_id: str, run_id: str, request: Request) -> dict:
+    """Only the repair agent's fixed copy (the dashboard uses /investigate)."""
+    return _one_agent(project_id, run_id, request, "fix")
 
 
 def _fixed_file(project_id: str, run_id: str) -> tuple:
@@ -410,31 +356,16 @@ def _fixed_file(project_id: str, run_id: str) -> tuple:
     return Path(row["filename"]), fix["file_name"]
 
 
-@app.post("/api/projects/{project_id}/runs/{run_id}/fix")
-def fix_run(project_id: str, run_id: str, request: Request) -> dict:
-    """Let the AI repair agent fix a copy of the run's file, then re-check it. The original is never changed."""
-    project = _project(project_id)
+@app.get("/api/projects/{project_id}/runs/{run_id}/data")
+def download_run_data(project_id: str, run_id: str) -> FileResponse:
+    """The data a run checked, e.g. a unified table or a source pulled from a database."""
     run = _run_row(project_id, run_id)
-    doc = json.loads(run["report_json"])
-    if not doc["issues"]:
-        raise HTTPException(409, "This run passed cleanly; there is nothing to fix")
-    df = _dataset_rows(run["dataset_id"])
-    if df is None:
-        raise HTTPException(409, "The file for this check is no longer stored, so it can't be repaired")
-    cfg = _config(project["config_yaml"])
-    session = RepairSession(df, json.loads(project["baseline_json"]), cfg,
-                            reference=_dataset_rows(project["baseline_dataset_id"]))
-    result = _ai(lambda: run_repair(session))
-    fixed = result.pop("fixed_frame")
-    stem = Path(doc.get("data_file") or "data").stem
-    path = upload_dir() / f"{uuid.uuid4().hex}.csv"
-    fixed.to_csv(path, index=False)
-    dataset_id = _record_dataset(project_id, f"{stem} (fixed).csv", path, "fixed", fixed)
-    doc["fix"] = {**result, "dataset_id": dataset_id, "file_name": f"{stem}-fixed.csv",
-                  "by": request.state.user["name"], "at": now_iso()}
     with connect() as db:
-        db.execute("UPDATE runs SET report_json = ? WHERE id = ?", (json.dumps(doc), run_id))
-    return doc["fix"]
+        row = db.execute("SELECT name, filename FROM datasets WHERE id = ?", (run["dataset_id"],)).fetchone()
+    if row is None or not Path(row["filename"]).exists():
+        raise HTTPException(404, "The data for this check is no longer stored")
+    path = Path(row["filename"])
+    return FileResponse(path, filename=f"{Path(row['name']).stem}{path.suffix}")
 
 
 @app.get("/api/projects/{project_id}/runs/{run_id}/fixed")
@@ -447,7 +378,7 @@ def download_fixed(project_id: str, run_id: str) -> FileResponse:
 def check_fixed(project_id: str, run_id: str, request: Request) -> dict:
     """Run a normal check on the repaired file, so it shows up in the history next to the original."""
     path, name = _fixed_file(project_id, run_id)
-    return _run_check(_project(project_id), name, path, _load(path), False, request.state.user["name"])
+    return run_check(project_row(project_id), name, path, load_upload(path), False, request.state.user["name"])
 
 
 @app.put("/api/projects/{project_id}/runs/{run_id}/review")
@@ -466,10 +397,10 @@ def review_run(project_id: str, run_id: str, payload: Review, request: Request) 
 @app.post("/api/projects/{project_id}/rules/draft")
 def draft_project_rules(project_id: str, payload: DraftRules) -> dict:
     """Turn a plain-English request into a complete, validated datapulse.yml. Nothing is saved."""
-    project = _project(project_id)
-    cfg = _config(project["config_yaml"])
+    project = project_row(project_id)
+    cfg = project_config(project["config_yaml"])
     profile = json.loads(project["baseline_json"])["profile"] if project["baseline_json"] else None
-    return _ai(lambda: draft_rules(payload.request, payload.config_yaml, profile, cfg))
+    return ai_call(lambda: draft_rules(payload.request, payload.config_yaml, profile, cfg))
 
 
 @app.get("/api/projects/{project_id}/runs/{run_id}")

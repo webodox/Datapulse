@@ -199,6 +199,43 @@ SCHEMA = {
 }
 
 
+MAP_SYSTEM = """You are mapping a new data source onto a project's standard format. The standard is the \
+project's baseline: its column names, types and value scales. The source holds the same kind of data in its own \
+shape - different column names, other units (cents instead of dollars), numbers stored as text, different \
+capitalisation. Build a recipe with the tools so the source matches the standard.
+
+Start with list_issues, then compare columns with get_column_stats: look up each unmatched standard column and \
+each unmatched source column, and match them by type, empty rate, distinct values and numeric range, not by name \
+alone. Then:
+- rename source columns to their standard names;
+- scale a column whose values are ~100x or ~1000x the standard's (after renaming it);
+- convert numbers stored as text;
+- standardize capitalisation and spacing of known values;
+- remove duplicate rows by the standard's key columns when the standard is unique on them;
+- remove source-only columns that have no counterpart in the standard.
+Never guess: if the statistics don't clearly support a match, leave it and list it under not_fixed. The steps you \
+apply are replayed automatically on every future load once a person approves them. You only ever see counts and \
+statistics, never the data itself."""
+
+MAP_TOOLS = [t for t in TOOLS if t["name"] not in ("fill_missing", "drop_rows_missing")]
+
+
+def _repair_intro(session, before) -> str:
+    return (f"This batch has {len(session.original):,} rows and failed with {len(before.issues)} issue(s). "
+            "Repair what can safely be repaired.")
+
+
+def _map_intro(session, before) -> str:
+    standard = list(session.baseline["profile"]["columns"])
+    return (f"Standard columns: {json.dumps(standard)}\n"
+            f"Source columns (after {len(session.operations)} automatic step(s)): {json.dumps(list(session.working.columns))}\n"
+            f"The source has {len(session.original):,} rows and currently shows {len(session.check().issues)} issue(s) "
+            "against the standard. Map it.")
+
+
+MODES = {"repair": (SYSTEM, TOOLS, _repair_intro), "map": (MAP_SYSTEM, MAP_TOOLS, _map_intro)}
+
+
 @dataclass
 class RepairSession:
     original: pd.DataFrame
@@ -207,8 +244,10 @@ class RepairSession:
     reference: Optional[pd.DataFrame] = None  # the baseline's rows, so the ML drift check runs too
     operations: List[Dict[str, Any]] = field(default_factory=list)
 
+    allowed: Optional[set] = None  # tool names the agent may use; None means all
+
     def __post_init__(self):
-        self.working = self.original
+        self.working, _ = apply_operations(self.original, self.baseline["profile"], self.operations)
 
     def check(self, df: Optional[pd.DataFrame] = None):
         return run_checks(self.baseline, self.working if df is None else df, self.cfg, reference=self.reference)
@@ -239,6 +278,8 @@ class RepairSession:
         return {"effect": effect, "issues_remaining": _counts(self.check().issues)}
 
     def call(self, name: str, args: Dict[str, Any]) -> Any:
+        if self.allowed is not None and name not in self.allowed:
+            raise RepairError(f"{name} is not available for this task.")
         if name in OPERATIONS:
             return self.repair(name, dict(args))
         if name in ("list_issues", "get_column_stats", "undo_last"):
@@ -247,16 +288,19 @@ class RepairSession:
 
 
 def run_repair(session: RepairSession, client=None, max_turns: int = 16,
-               on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> Dict[str, Any]:
-    """Let the agent repair a copy, then replay its operations onto the original and re-run every check."""
+               on_step: Optional[Callable[[str, Dict[str, Any]], None]] = None, mode: str = "repair") -> Dict[str, Any]:
+    """Let the agent repair a copy, then replay its operations onto the original and re-run every check.
+
+    mode "map" uses the same loop to translate a new source into the project's standard format (see unify.py).
+    """
     cfg = session.cfg
     client = client or get_client(cfg)
+    system, tools, intro = MODES[mode]
+    session.allowed = {t["name"] for t in tools}
     before = session.check(session.original)
-    messages: List[Dict[str, Any]] = [{"role": "user", "content": (
-        f"This batch has {len(session.original):,} rows and failed with {len(before.issues)} issue(s). "
-        "Repair what can safely be repaired.")}]
+    messages: List[Dict[str, Any]] = [{"role": "user", "content": intro(session, before)}]
     for _ in range(max_turns):
-        response = create(client, cfg, system=SYSTEM, tools=TOOLS, messages=messages,
+        response = create(client, cfg, system=system, tools=tools, messages=messages,
                           output_config={**json_format(SCHEMA), "effort": "medium"})
         messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason == "pause_turn":
@@ -279,7 +323,7 @@ def run_repair(session: RepairSession, client=None, max_turns: int = 16,
             results.append({"type": "tool_result", "tool_use_id": c.id, "content": content, "is_error": error})
         messages.append({"role": "user", "content": results})
     else:
-        raise DataPulseError(f"The repair agent did not finish within {max_turns} steps.")
+        raise DataPulseError(f"The AI agent did not finish within {max_turns} steps.")
 
     fixed, effects = apply_operations(session.original, session.baseline["profile"], session.operations)
     after = session.check(fixed)
