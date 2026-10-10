@@ -1,6 +1,7 @@
 """The data-sources API (connect, map, pull, unify) and the merged "Investigate with AI" endpoint."""
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ def test_sources_flow_connect_map_pull_unify(client, sqlite_source, tmp_path):
     pid = client.post("/api/projects", json={"name": "Sales"}).json()["id"]
     base = f"/api/projects/{pid}"
     standard_csv = tmp_path / "standard.db"
-    with sqlite3.connect(standard_csv) as db:
+    with closing(sqlite3.connect(standard_csv)) as db, db:
         GOOD.to_sql("orders", db, index=False)
     standard = client.post(f"{base}/sources", json={"name": "Main DB", "kind": "sqlite",
                                                     "settings": {"path": str(standard_csv), "query": "orders"}}).json()

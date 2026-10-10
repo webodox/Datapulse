@@ -17,6 +17,17 @@ def upload_dir() -> Path:
     return home() / "uploads"
 
 
+def samples_dir() -> Path:
+    """Sample SQLite sources created by "Try it with sample data"; an allowed SQLite folder."""
+    return home() / "samples"
+
+
+def allow_sample_sources() -> None:
+    folders = [d for d in os.getenv("DATAPULSE_SQLITE_DIR", "").split(os.pathsep) if d]
+    if str(samples_dir()) not in folders:
+        os.environ["DATAPULSE_SQLITE_DIR"] = os.pathsep.join([*folders, str(samples_dir())])
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 

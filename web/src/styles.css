@@ -428,3 +428,12 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .source-note li { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline }
 .note.warn { background: var(--warn-soft); color: var(--warn-text) }
 em.bad { color: var(--crit-text); font-style: normal }
+.progress { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 14px; color: var(--muted) }
+.progress li { display: flex; align-items: center; gap: 7px }
+.progress span { width: 22px; height: 22px; border-radius: 99px; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--surface-3); color: var(--muted) }
+.progress li.done { color: var(--ink-2) }
+.progress li.done span { background: var(--good-soft); color: var(--good-text) }
+.progress li.next { color: var(--ink); font-weight: 600 }
+.progress li.next span { background: var(--accent); color: var(--on-accent) }
+.unified-latest { display: flex; align-items: center; gap: 12px; flex-wrap: wrap }
+.unified-latest > div { flex: 1; min-width: 200px; display: grid }
