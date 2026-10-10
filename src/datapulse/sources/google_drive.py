@@ -6,7 +6,10 @@ import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import pandas as pd
+
 from datapulse.errors import DataPulseError
+from datapulse.sources.base import Field, Source, register
 from datapulse.sources.file_link import SUPPORTED
 from datapulse.sources.google_sheets import GoogleSheetsSource, parse_sheet_url
 from datapulse.sources.http import fetch_bytes, require_str
@@ -95,3 +98,23 @@ class GoogleDriveSource:
         path = dest_dir / f"{uuid.uuid4().hex}{ext}"
         path.write_bytes(body)
         return path
+
+
+@register
+class DriveFile(Source):
+    kind, label, group = "google_drive", "Google Drive", "Files & links"
+    description = "A CSV, Excel, JSON or Parquet file, or a document, shared as 'Anyone with the link can view'."
+    requires = ("httpx",)
+    fields = (Field("url", "Share link", "https://drive.google.com/file/d/…/view"),)
+
+    def _table(self, settings) -> pd.DataFrame:
+        from datapulse.sources.connected import download  # data files and documents alike; temp folder removed
+
+        return download(GoogleDriveSource(), {"url": settings["url"]}, {}, "the Google Drive file")
+
+    def test(self, settings):
+        df = self._table(settings)
+        return f"Reached the file: {len(df):,} rows, {df.shape[1]} columns."
+
+    def fetch(self, settings, max_rows):
+        return self._table(settings).head(max_rows + 1)

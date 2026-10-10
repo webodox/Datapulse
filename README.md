@@ -63,9 +63,13 @@ downloads and uploads files:
 |---|---|
 | **Database** | A connection URL. DataPulse recognises the database from it: PostgreSQL (also Supabase, Neon, Railway, RDS, Redshift), MySQL / MariaDB, Microsoft SQL Server / Azure SQL, MongoDB (also Atlas, DocumentDB, Cosmos DB), and any other database with a SQLAlchemy driver installed (Snowflake, BigQuery, Oracle, Databricks…). Then a table name, one `SELECT` query, or for MongoDB a collection (`database.collection`). |
 | **File** | An uploaded CSV, Excel, JSON or Parquet file, or a document (PDF, Word, text, Markdown, email, HTML, image). Documents are read once at upload: the AI unifier extracts their records into a table (without an API key, each document becomes one record of its text). Edit the source to upload a newer version. |
-| **Link** | A public `https://` link to a data file or document, including Google Sheets and Google Drive share links. |
-| **API** | Any JSON API URL, with an optional `Authorization` header (kept on the server) and the path to the rows (found automatically if empty). Nested fields become columns. |
-| **Web page** | A public page or online PDF; the AI extracts the records it holds on every pull. |
+| **Google Drive** | A file shared as "Anyone with the link can view": data files and documents alike. |
+| **Link** | A public `https://` link to a data file or document, including Google Sheets share links. |
+| **REST API** | Any JSON API URL, with optional headers (kept on the server) and the path to the rows (found automatically if empty). Nested fields become columns. |
+| **Web page** | A public page: its address, title and text become one row. |
+
+File, Link, REST API and Web page have **Use test data**, which fills the form with a public example so you can try
+a source without your own credentials.
 
 **How unifying works.** One source is the *standard*: its format (columns, types, value scales) becomes the
 project's baseline. Every other source is mapped onto it once. Columns whose names match apart from case and

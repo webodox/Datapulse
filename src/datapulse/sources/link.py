@@ -1,4 +1,4 @@
-"""A file at a link: CSV, Excel, JSON or Parquet (or a document) over HTTPS, incl. Google Sheets and Drive links.
+"""A file at a link: CSV, Excel, JSON or Parquet (or a document) over HTTPS, including Google Sheets share links.
 
 Also the simplest example of a plug-in; copy this file to add a new kind of source.
 """
@@ -75,7 +75,8 @@ def read_bytes(data: bytes, url: str, content_type: str) -> pd.DataFrame:
 @register
 class Link(Source):
     kind, label, group = "link", "Link", "Files & links"
-    description = "A public link to a CSV, Excel, JSON or Parquet file or a document: Google Sheets, Google Drive, cloud storage."
+    description = "A public link to a CSV, Excel, JSON or Parquet file or a document: Google Sheets, open-data portals, cloud storage."
+    has_sample = True
     fields = (Field("url", "Link", "https://docs.google.com/spreadsheets/d/…  or  https://example.com/orders.csv"),)
 
     def get(self, settings):
@@ -98,8 +99,4 @@ class Link(Source):
         return f"Reached the file: {len(df):,} rows, {len(df.columns)} columns."
 
     def fetch(self, settings, max_rows):
-        if urlsplit(settings["url"]).hostname == "drive.google.com":
-            from .connected import download
-            from .google_drive import GoogleDriveSource
-            return download(GoogleDriveSource(), {"url": settings["url"]}, {}, "the Google Drive file")
         return read_bytes(*self.get(settings))

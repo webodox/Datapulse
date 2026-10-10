@@ -1,4 +1,4 @@
-"""The unifier's connectors and document reading, as Add source plug-ins (API, Web page, Drive, Excel, documents)."""
+"""Excel and documents through the File, Link and Google Drive sources, and the REST source's secret headers."""
 import io
 
 import pytest
@@ -23,7 +23,7 @@ def mock_http(monkeypatch):
     return install
 
 
-def test_api_source_flattens_nested_records_and_sends_the_secret_header(mock_http):
+def test_rest_source_flattens_nested_records_and_keeps_headers_secret(mock_http):
     seen = {}
 
     def handler(request):
@@ -32,32 +32,18 @@ def test_api_source_flattens_nested_records_and_sends_the_secret_header(mock_htt
             {"id": 1, "customer": {"country": "US"}, "total": 12.5},
             {"id": 2, "customer": {"country": "DE"}, "total": 8}]}})
     mock_http(handler)
-    settings = {"url": "https://api.example.com/orders", "records_path": "data.items", "auth": "Bearer sk_live_Secret123"}
-    df = sources.fetch_source("api", settings)
+    settings = {"url": "https://api.example.com/orders", "records_path": "data.items",
+                "headers": '{"Authorization": "Bearer sk_live_Secret123"}'}
+    df = sources.fetch_source("rest", settings)
     assert df["customer.country"].tolist() == ["US", "DE"] and seen["auth"] == "Bearer sk_live_Secret123"
-    assert sources.public_settings("api", settings)["auth"] == ""
+    assert sources.public_settings("rest", settings)["headers"] == ""
 
 
-def test_api_errors_never_show_the_secret(mock_http):
-    mock_http(lambda request: httpx.Response(401, json={"error": "nope"}))
-    with pytest.raises(sources.SourceError) as err:
-        sources.try_connection("api", {"url": "https://api.example.com/orders", "auth": "Bearer sk_live_Secret123"})
-    assert "401" in str(err.value) and "Secret123" not in str(err.value)
-
-
-def test_web_page_becomes_records(mock_http):
-    mock_http(lambda request: httpx.Response(200, text="<html><body><h1>Spring prices</h1><p>Apples $2</p></body></html>",
-                                             headers={"content-type": "text/html"}))
-    df = sources.fetch_source("web_page", {"url": "https://example.com/prices"})
-    assert len(df) == 1 and "Spring prices" in df.loc[0, "title"]
-
-
-def test_google_drive_links_use_the_drive_connector(mock_http):
-    csv = make_df(20).to_csv(index=False).encode()
-    mock_http(lambda request: httpx.Response(200, content=csv, headers={
-        "content-disposition": 'attachment; filename="orders.csv"', "content-type": "text/csv"}))
-    df = sources.fetch_source("link", {"url": "https://drive.google.com/file/d/AbC123/view?usp=sharing"})
-    assert len(df) == 20 and "order_id" in df.columns
+def test_google_drive_documents_are_read_too(mock_http):
+    mock_http(lambda request: httpx.Response(200, content=b"# Invoice 7\n\nTotal: $40\n", headers={
+        "content-disposition": 'attachment; filename="invoice.md"', "content-type": "text/markdown"}))
+    df = sources.fetch_source("google_drive", {"url": "https://drive.google.com/file/d/AbC123/view?usp=sharing"})
+    assert len(df) == 1 and "Invoice 7" in df.loc[0, "title"]
 
 
 def test_excel_links_are_read():

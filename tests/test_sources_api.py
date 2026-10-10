@@ -27,6 +27,24 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
+def test_add_source_form_fills_with_test_data_and_connects(client):
+    pid = client.post("/api/projects", json={"name": "Try"}).json()["id"]
+    catalog = {k["kind"]: k for k in client.get("/api/sources/catalog").json()}
+    assert catalog["file"]["has_sample"] and catalog["rest"]["label"] == "REST API"
+    assert "google_drive" in catalog and not catalog["database"]["has_sample"]
+    sample = client.post(f"/api/projects/{pid}/sources/sample", json={"kind": "file"}).json()
+    assert sample["name"] == "Sample orders" and sample["settings"]["file"].endswith("/orders.csv")
+    tested = client.post(f"/api/projects/{pid}/sources/test",
+                         json={"kind": "file", "settings": sample["settings"]}).json()
+    assert tested["ok"], tested
+    created = client.post(f"/api/projects/{pid}/sources",
+                          json={"name": sample["name"], "kind": "file", "settings": sample["settings"]}).json()
+    assert created["kind"] == "file" and created["name"] == "Sample orders"
+    link = client.post(f"/api/projects/{pid}/sources/sample", json={"kind": "link"}).json()
+    assert link["settings"]["url"].startswith("https://")
+    assert client.post(f"/api/projects/{pid}/sources/sample", json={"kind": "database"}).status_code == 404
+
+
 def test_sources_flow_connect_map_pull_unify(client, sqlite_source, tmp_path):
     pid = client.post("/api/projects", json={"name": "Sales"}).json()["id"]
     base = f"/api/projects/{pid}"

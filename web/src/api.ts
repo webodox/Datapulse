@@ -31,7 +31,7 @@ export type Fix = {
 }
 export type Investigation = { triage: Triage | null; fix: Fix | null; errors: Partial<Record<'triage' | 'fix', string>> }
 export type SourceField = { name: string; label: string; placeholder: string; secret: boolean; required: boolean; multiline: boolean; help: string; input: 'text' | 'file' }
-export type SourceKind = { kind: string; label: string; group: string; description: string; fields: SourceField[]; available: boolean; missing_packages: string[]; hidden: boolean }
+export type SourceKind = { kind: string; label: string; group: string; description: string; fields: SourceField[]; available: boolean; missing_packages: string[]; hidden: boolean; has_sample: boolean }
 export type Step = { operation: string; args: Record<string, unknown>; reason: string; effect?: string }
 export type Mapping = Omit<Fix, 'file_name' | 'operations'> & { operations: Step[]; automatic_steps: number; source_columns: string[]; model: string | null; at?: string }
 export type Source = {
@@ -94,6 +94,8 @@ export const api = {
   investigate: (id: string, run: string) => request<Investigation>('POST', `/api/projects/${id}/runs/${run}/investigate`),
   runDataUrl: (id: string, run: string) => `${API}/api/projects/${id}/runs/${run}/data`,
   sourceCatalog: () => request<SourceKind[]>('GET', '/api/sources/catalog'),
+  sourceSample: (id: string, kind: string) =>
+    request<{ name: string; settings: Record<string, string> }>('POST', `/api/projects/${id}/sources/sample`, { kind }),
   sources: (id: string) => request<Source[]>('GET', `/api/projects/${id}/sources`),
   testSource: (id: string, kind: string, settings: Record<string, string>, source_id?: string) =>
     request<{ ok: boolean; message: string }>('POST', `/api/projects/${id}/sources/test`, { kind, settings, source_id }),

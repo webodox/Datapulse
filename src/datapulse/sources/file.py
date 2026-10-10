@@ -29,7 +29,9 @@ def stored_path(value: str) -> Path:
 @register
 class File(Source):
     kind, label, group = "file", "File", "Files & links"
-    description = "Upload a spreadsheet or data file (CSV, Excel, JSON, Parquet), or a PDF, Word file or image for the AI to read."
+    description = ("Upload a spreadsheet or data file (CSV, Excel, JSON, Parquet), or a PDF, Word file or image for "
+                   "the AI to read. Upload a newer version by editing the source.")
+    has_sample = True
     fields = (Field("file", "File", "CSV, Excel, JSON, Parquet, PDF, Word, text or image · up to 25 MB", input="file"),)
 
     def test(self, settings):

@@ -19,10 +19,14 @@ function useCatalog() {
   return kinds
 }
 const labelOf = (kinds: SourceKind[], kind: string) => kinds.find(k => k.kind === kind)?.label || kind
-const KIND_ICON: Record<string, IconName> = { database: 'database', file: 'upload', link: 'external', api: 'code', web_page: 'activity' }
+const KIND_ICON: Record<string, IconName> = {
+  database: 'database', file: 'upload', link: 'external', rest: 'code', google_drive: 'external', web_page: 'activity',
+}
 
 const FILE_TYPES = '.csv,.json,.jsonl,.ndjson,.parquet,.pq,.xlsx,.xls,.pdf,.docx,.txt,.md,.markdown,.eml,.html,.htm,.png,.jpg,.jpeg,.webp,.gif'
-const NAME_HINT: Record<string, string> = { database: 'Store database', file: 'March export', link: 'Sales sheet', api: 'Shop API', web_page: 'Supplier price list' }
+const NAME_HINT: Record<string, string> = {
+  database: 'Store database', file: 'March export', link: 'Sales sheet', rest: 'Shop API', google_drive: 'Shared orders file', web_page: 'Supplier page',
+}
 
 /** Mirrors the server's detection, to show which database a pasted URL points at. */
 const DETECTED: Array<[RegExp, string]> = [
@@ -89,7 +93,7 @@ export function SourcesTab({ detail, changed, ai, openRun }:
     </div>}
 
     {list.length === 0 ? <Empty icon="plug" title="No sources yet">
-      <span>Any database (PostgreSQL, Supabase, MySQL, SQL Server, MongoDB, Snowflake…), a file, or a link.</span>
+      <span>Any database, a file, a link, a REST API, Google Drive or a web page. Use test data to try one without your own credentials.</span>
     </Empty> : <div className="source-list">
       {list.map(s => <SourceCard key={s.id} source={s} kinds={kinds} detail={detail} ai={ai}
         refresh={refresh} edit={() => setEditing(s)} openRun={openRun} />)}
@@ -208,6 +212,12 @@ function SourceDialog({ projectId, kinds, source, close, saved }:
 
   const settings = () => Object.fromEntries(Object.entries(values).filter(([k]) => plugin?.fields.some(f => f.name === k)))
   const test = () => act('test', async () => setResult(await api.testSource(projectId, kind, settings(), source?.id)))
+  const fill = () => act('sample', async () => {
+    const sample = await api.sourceSample(projectId, kind)
+    setName(current => current.trim() ? current : sample.name)
+    setValues(current => ({ ...current, ...sample.settings }))
+    setResult(null)
+  })
   const submit = (e: FormEvent) => {
     e.preventDefault()
     act('save', async () => {
@@ -260,6 +270,8 @@ function SourceDialog({ projectId, kinds, source, close, saved }:
       {plugin.fields.some(f => f.secret) && <p className="muted small"><Icon name="shield" size={13} /> Passwords stay on the DataPulse server and are never shown again. A read-only database user is best.</p>}
       {result && <p className={`test-result ${result.ok ? 'ok' : 'bad'}`}><Icon name={result.ok ? 'check' : 'alert'} size={14} /> {result.message}</p>}
       <div className="actions">
+        {plugin.has_sample && <button type="button" className="button ghost" disabled={!!busy} onClick={fill}>
+          {busy === 'sample' ? <Spinner text="Preparing…" /> : 'Use test data'}</button>}
         <button type="button" className="button outline" disabled={!!busy} onClick={test}>
           {busy === 'test' ? <Spinner text={kind === 'file' ? 'Reading…' : 'Connecting…'} /> : kind === 'file' ? 'Read the file' : 'Test connection'}</button>
         <button className="button primary" disabled={!!busy}>{busy === 'save' ? <Spinner text="Saving…" /> : source ? 'Save changes' : 'Add source'}</button>
