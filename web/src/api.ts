@@ -100,7 +100,7 @@ export const api = {
   uploadSourceFile(id: string, file: File) {
     const form = new FormData()
     form.append('file', file)
-    return request<{ file: string; name: string }>('POST', `/api/projects/${id}/sources/files`, form)
+    return request<{ file: string; name: string; note: string | null }>('POST', `/api/projects/${id}/sources/files`, form)
   },
   addSource: (id: string, form: SourceForm) => request<Source>('POST', `/api/projects/${id}/sources`, form),
   editSource: (id: string, sid: string, form: SourceForm) => request<Source>('PUT', `/api/projects/${id}/sources/${sid}`, form),

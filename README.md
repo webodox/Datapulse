@@ -62,8 +62,10 @@ downloads and uploads files:
 | Choice | What you give it |
 |---|---|
 | **Database** | A connection URL. DataPulse recognises the database from it: PostgreSQL (also Supabase, Neon, Railway, RDS, Redshift), MySQL / MariaDB, Microsoft SQL Server / Azure SQL, MongoDB (also Atlas, DocumentDB, Cosmos DB), and any other database with a SQLAlchemy driver installed (Snowflake, BigQuery, Oracle, Databricks…). Then a table name, one `SELECT` query, or for MongoDB a collection (`database.collection`). |
-| **File** | An uploaded CSV, JSON, JSON Lines or Parquet file. Edit the source to upload a newer version. |
-| **Link** | A public `https://` link to a CSV, JSON or Parquet file, including Google Sheets share links. |
+| **File** | An uploaded CSV, Excel, JSON or Parquet file, or a document (PDF, Word, text, Markdown, email, HTML, image). Documents are read once at upload: the AI unifier extracts their records into a table (without an API key, each document becomes one record of its text). Edit the source to upload a newer version. |
+| **Link** | A public `https://` link to a data file or document, including Google Sheets and Google Drive share links. |
+| **API** | Any JSON API URL, with an optional `Authorization` header (kept on the server) and the path to the rows (found automatically if empty). Nested fields become columns. |
+| **Web page** | A public page or online PDF; the AI extracts the records it holds on every pull. |
 
 **How unifying works.** One source is the *standard*: its format (columns, types, value scales) becomes the
 project's baseline. Every other source is mapped onto it once. Columns whose names match apart from case and

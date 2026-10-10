@@ -24,7 +24,7 @@ GOOD = load_dataframe(EX / "data/orders.csv")
 
 def test_catalog_lists_every_plugin_with_its_form():
     kinds = {c["kind"]: c for c in sources.catalog()}
-    assert [c["kind"] for c in sources.catalog() if not c["hidden"]] == ["database", "file", "link"]
+    assert [c["kind"] for c in sources.catalog() if not c["hidden"]] == ["database", "file", "link", "api", "web_page"]
     assert {"postgres", "mysql", "sqlserver", "sql", "sqlite", "mongodb", "link"} <= set(kinds)
     assert [c["group"] for c in sources.catalog()][0] == "Databases"
     url = next(f for f in kinds["postgres"]["fields"] if f["name"] == "url")
