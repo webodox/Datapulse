@@ -114,6 +114,8 @@ function Shell({ user, signOut }: { user: User; signOut: () => void }) {
     {creating && <Modal title="New project" onClose={() => setCreating(false)}>
       <p className="muted">A project unifies one kind of data, such as orders or patients, from all the places it lives.</p>
       <CreateProject onCreated={opened} autoFocus />
+      <div className="or">or</div>
+      <SampleButton onCreated={opened} />
     </Modal>}
   </div>
 }
@@ -129,8 +131,6 @@ function Offline({ retry }: { retry: () => void }) {
 }
 
 function Welcome({ onCreated }: { onCreated: (c: Created) => void }) {
-  const [busy, run] = useAction()
-  const notify = useNotify()
   return <div className="center-card wide">
     <h1>All your data, in one format, checked</h1>
     <p>The same data lives in many places, each in its own shape: a PostgreSQL database, a MySQL store system,
@@ -144,11 +144,18 @@ function Welcome({ onCreated }: { onCreated: (c: Created) => void }) {
     <div className="welcome-actions">
       <CreateProject onCreated={onCreated} />
       <div className="or">or</div>
-      <button className="button outline" disabled={!!busy} onClick={() => run('seed', async () => {
-        onCreated(await api.seed()); notify.ok('Sample project ready: 3 connected sources. Map the two that need it, then Unify.')
-      })}>{busy ? <Spinner text="Loading…" /> : <><Icon name="sparkle" size={15} /> Try it with sample data</>}</button>
+      <SampleButton onCreated={onCreated} />
     </div>
   </div>
+}
+
+/** A sample project with three connected databases holding the same orders in different formats. */
+function SampleButton({ onCreated }: { onCreated: (c: Created) => void }) {
+  const [busy, run] = useAction()
+  const notify = useNotify()
+  return <button className="button outline" disabled={!!busy} onClick={() => run('seed', async () => {
+    onCreated(await api.seed()); notify.ok('Sample project ready: 3 connected sources. Map the two that need it, then Unify.')
+  })}>{busy ? <Spinner text="Loading…" /> : <><Icon name="sparkle" size={15} /> Try it with sample data</>}</button>
 }
 
 function CreateProject({ onCreated, autoFocus }: { onCreated: (c: Created) => void; autoFocus?: boolean }) {

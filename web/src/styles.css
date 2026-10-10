@@ -117,7 +117,7 @@ input:not([type]):focus, .search:focus, .editor:focus { border-color: var(--acce
 .banner { display: flex; align-items: center; gap: 12px; background: var(--warn-soft); color: var(--warn-text); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 18px }
 .banner > div { flex: 1; display: grid; gap: 4px; min-width: 0 }
 .banner code { background: var(--surface); color: var(--ink); justify-self: start }
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; overflow-x: auto }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; overflow-x: auto; overflow-y: hidden }
 .tabs a { display: flex; align-items: center; gap: 7px; padding: 10px 14px; color: var(--muted); text-decoration: none; font-weight: 600; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap }
 .tabs a:hover { color: var(--ink) }
 .tabs a.active { color: var(--ink); border-color: var(--accent) }
