@@ -18,6 +18,9 @@ dependencies = [
   "rich>=13",
   "scikit-learn>=1.2",
   "anthropic>=1",
+  "openpyxl>=3.1",
+  "pypdf>=4",
+  "python-docx>=1.1",
 ]
 
 [project.optional-dependencies]

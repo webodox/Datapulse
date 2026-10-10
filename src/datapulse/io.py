@@ -9,8 +9,14 @@ import pandas as pd
 
 from .errors import DataPulseError
 
-SUPPORTED = (".csv", ".parquet", ".pq", ".json", ".jsonl", ".ndjson")
+SUPPORTED = (".csv", ".parquet", ".pq", ".json", ".jsonl", ".ndjson", ".xlsx", ".xls")
 JSON_LINES = (".jsonl", ".ndjson")
+EXCEL = (".xlsx", ".xls")
+# Unstructured inputs: the document unifier extracts records from these (see datapulse.unifier.documents).
+DOCUMENTS = (".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".docx", ".md", ".markdown", ".txt",
+             ".eml", ".html", ".htm")
+ARCHIVES = (".zip",)
+INPUTS = SUPPORTED + DOCUMENTS + ARCHIVES
 
 
 def load_dataframe(path) -> pd.DataFrame:
@@ -21,18 +27,24 @@ def load_dataframe(path) -> pd.DataFrame:
         raise DataPulseError(f"Not a file: {p}")
     ext = p.suffix.lower()
     if ext not in SUPPORTED:
-        raise DataPulseError(f"Unsupported file type '{p.suffix}' for {p}. Supported: .csv, .parquet, .json, .jsonl")
+        raise DataPulseError(
+            f"Unsupported file type '{p.suffix}' for {p}. "
+            "Supported: .csv, .parquet, .json, .jsonl, .xlsx"
+        )
     try:
         if ext == ".csv":
             df = pd.read_csv(p)
         elif ext == ".json" or ext in JSON_LINES:  # an array of row objects, or one object per line
             df = pd.read_json(p, orient="records", lines=ext in JSON_LINES, convert_dates=False)
+        elif ext in EXCEL:
+            df = pd.read_excel(p)  # first sheet; needs openpyxl for .xlsx
         else:
             df = pd.read_parquet(p)
     except pd.errors.EmptyDataError:
         raise DataPulseError(f"{p} is empty (no header row).")
     except ImportError as e:
-        raise DataPulseError(f"Missing dependency to read {p}: {e}. Try: pip install pyarrow")
+        hint = "openpyxl" if ext in EXCEL else "pyarrow"
+        raise DataPulseError(f"Missing dependency to read {p}: {e}. Try: pip install {hint}")
     except Exception as e:  # corrupt files, bad encodings, ragged CSV rows...
         raise DataPulseError(f"Could not read {p} as {ext[1:]}: {e}")
     return normalize_frame(df, str(p))
