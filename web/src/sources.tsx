@@ -20,7 +20,12 @@ function useCatalog() {
 }
 const labelOf = (kinds: SourceKind[], kind: string) => kinds.find(k => k.kind === kind)?.label || kind
 const KIND_ICON: Record<string, IconName> = {
-  database: 'database', file: 'upload', link: 'external', rest: 'external', google_drive: 'external', web_page: 'external',
+  database: 'database', file: 'upload', link: 'external', rest: 'code', google_drive: 'external', web_page: 'activity',
+}
+
+const FILE_TYPES = '.csv,.json,.jsonl,.ndjson,.parquet,.pq,.xlsx,.xls,.pdf,.docx,.txt,.md,.markdown,.eml,.html,.htm,.png,.jpg,.jpeg,.webp,.gif'
+const NAME_HINT: Record<string, string> = {
+  database: 'Store database', file: 'March export', link: 'Sales sheet', rest: 'Shop API', google_drive: 'Shared orders file', web_page: 'Supplier page',
 }
 
 /** Mirrors the server's detection, to show which database a pasted URL points at. */
@@ -226,7 +231,8 @@ function SourceDialog({ projectId, kinds, source, close, saved }:
 
   const upload = (field: string, file: File) => act('upload', async () => {
     const stored = await api.uploadSourceFile(projectId, file)
-    setValues(v => ({ ...v, [field]: stored.file })); setResult(null)
+    setValues(v => ({ ...v, [field]: stored.file }))
+    setResult(stored.note ? { ok: true, message: stored.note } : null)
     if (!name.trim()) setName(stored.name.replace(/\.[^.]+$/, ''))
   })
   const choices = kinds.filter(k => !k.hidden)
@@ -243,13 +249,13 @@ function SourceDialog({ projectId, kinds, source, close, saved }:
     </div> : <form className="source-form" onSubmit={submit}>
       {!source && <button type="button" className="link back" onClick={() => setKind('')}>← {plugin.label}</button>}
       <label>Name<input value={name} onChange={e => setName(e.target.value)} maxLength={80}
-        placeholder={`e.g. ${kind === 'database' ? 'Store database' : kind === 'file' ? 'March export' : 'Sales sheet'}`} /></label>
+        placeholder={`e.g. ${NAME_HINT[kind] || 'Sales data'}`} /></label>
       {plugin.fields.map(f => <label key={f.name}>{f.label}{!f.required && <small className="muted"> optional</small>}
         {f.input === 'file'
           ? <span className="file-pick">
-            <input type="file" accept=".csv,.json,.jsonl,.ndjson,.parquet,.pq" disabled={!!busy}
+            <input type="file" accept={FILE_TYPES} disabled={!!busy}
               onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) upload(f.name, file) }} />
-            <small className="muted">{busy === 'upload' ? 'Uploading…' : values[f.name] ? `Uploaded: ${values[f.name].split('/').pop()}` : f.placeholder}</small>
+            <small className="muted">{busy === 'upload' ? 'Uploading… documents are read by the AI, which can take a minute' : values[f.name] ? `Uploaded: ${values[f.name].split('/').pop()}` : f.placeholder}</small>
           </span>
           : f.multiline
           ? <textarea rows={3} value={values[f.name] || ''} placeholder={f.placeholder} spellCheck={false}

@@ -1,11 +1,10 @@
-"""An uploaded file (CSV, JSON, JSON Lines or Parquet). Upload a newer version by editing the source."""
+"""An uploaded file: CSV, Excel, JSON or Parquet, or a document the AI reads at upload. Edit the source to replace it."""
 from __future__ import annotations
 
 import os
 import re
 from pathlib import Path
 
-from ..io import load_dataframe
 from .base import Field, Source, SourceError, register
 
 STORED = re.compile(r"^[0-9a-f]{32}/[^/\\]+$")  # "<upload id>/<original file name>"
@@ -30,14 +29,17 @@ def stored_path(value: str) -> Path:
 @register
 class File(Source):
     kind, label, group = "file", "File", "Files & links"
-    description = "Upload a CSV, JSON or Parquet file, or use the sample orders file. Upload a newer version by editing the source."
+    description = ("Upload a spreadsheet or data file (CSV, Excel, JSON, Parquet), or a PDF, Word file or image for "
+                   "the AI to read. Upload a newer version by editing the source.")
     has_sample = True
-    fields = (Field("file", "File", "CSV, JSON, JSONL or Parquet · up to 25 MB", input="file"),)
+    fields = (Field("file", "File", "CSV, Excel, JSON, Parquet, PDF, Word, text or image · up to 25 MB", input="file"),)
 
     def test(self, settings):
         df = self.fetch(settings, 0)
         return f"Read the file: {len(df):,} rows, {len(df.columns)} columns."
 
     def fetch(self, settings, max_rows):
+        from .connected import read_any
+
         path = stored_path(settings["file"])
-        return load_dataframe(path)
+        return read_any(path, path.name)

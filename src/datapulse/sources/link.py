@@ -1,4 +1,4 @@
-"""A file at a link: CSV, JSON, JSON Lines or Parquet over HTTPS, including Google Sheets share links.
+"""A file at a link: CSV, Excel, JSON or Parquet (or a document) over HTTPS, including Google Sheets share links.
 
 Also the simplest example of a plug-in; copy this file to add a new kind of source.
 """
@@ -8,11 +8,14 @@ import io
 import ipaddress
 import re
 import socket
+import tempfile
 import urllib.request
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pandas as pd
 
+from ..io import DOCUMENTS, EXCEL
 from .base import Field, Source, SourceError, register
 
 MAX_BYTES = 50 * 1024 * 1024
@@ -50,6 +53,13 @@ class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
 
 def read_bytes(data: bytes, url: str, content_type: str) -> pd.DataFrame:
     path = urlsplit(url).path.lower()
+    ext = Path(path).suffix
+    if ext in EXCEL or ext in DOCUMENTS or "application/pdf" in content_type:
+        from .connected import read_any  # spreadsheets and documents are read from a file
+        with tempfile.TemporaryDirectory(prefix="datapulse-") as folder:
+            target = Path(folder) / f"download{ext if ext in EXCEL + DOCUMENTS else '.pdf'}"
+            target.write_bytes(data)
+            return read_any(target, url)
     if path.endswith((".parquet", ".pq")) or data[:4] == b"PAR1":
         return pd.read_parquet(io.BytesIO(data))
     if path.endswith((".jsonl", ".ndjson")):
@@ -65,7 +75,7 @@ def read_bytes(data: bytes, url: str, content_type: str) -> pd.DataFrame:
 @register
 class Link(Source):
     kind, label, group = "link", "Link", "Files & links"
-    description = "A CSV, JSON or Parquet file at a public link: Google Sheets, open-data portals, cloud storage."
+    description = "A public link to a CSV, Excel, JSON or Parquet file or a document: Google Sheets, open-data portals, cloud storage."
     has_sample = True
     fields = (Field("url", "Link", "https://docs.google.com/spreadsheets/d/…  or  https://example.com/orders.csv"),)
 
@@ -85,8 +95,7 @@ class Link(Source):
         return data, url, content_type
 
     def test(self, settings):
-        data, url, content_type = self.get(settings)
-        df = read_bytes(data, url, content_type)
+        df = self.fetch(settings, 0)
         return f"Reached the file: {len(df):,} rows, {len(df.columns)} columns."
 
     def fetch(self, settings, max_rows):

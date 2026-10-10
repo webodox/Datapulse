@@ -17,7 +17,9 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from datapulse.errors import DataPulseError
-from datapulse.io import SUPPORTED, load_dataframe
+from datapulse.io import ARCHIVES, INPUTS, load_dataframe
+from datapulse.sources.connected import read_any
+from datapulse.unifier.documents import is_document
 from datapulse.samples import write_samples
 from datapulse.sources import catalog, clean_settings, fetch_source, public_settings, try_connection, type_of
 from datapulse.unify import SOURCE_COLUMN, apply_recipe, combine, propose_mapping, validate_recipe
@@ -26,6 +28,7 @@ from .core import MAX_UPLOAD_BYTES, ROOT, ai_call, dataset_rows, loads, project_
 from .db import configure_sources, connect, now_iso, samples_dir, source_files_dir, upload_dir
 
 router = APIRouter(prefix="/api")
+UPLOADABLE = tuple(e for e in INPUTS if e not in ARCHIVES)
 
 
 class SourceForm(BaseModel):
@@ -143,11 +146,13 @@ def remove_uploaded_files(rows) -> None:
 
 @router.post("/projects/{project_id}/sources/files")
 async def upload_source_file(project_id: str, file: UploadFile = File(...)) -> dict:
-    """Store a file for a File source. Returns the id to save in the source's settings."""
+    """Store a file for a File source and return the id to save in its settings. A document (PDF, Word, image...)
+    is read once here: the AI extracts its records into a table, so later pulls don't call the AI again."""
     project_row(project_id)
     name = re.sub(r"[^\w.\- ]", "_", Path(file.filename or "data.csv").name).strip() or "data.csv"
-    if Path(name).suffix.lower() not in SUPPORTED:
-        raise HTTPException(415, "Supported files: CSV, JSON, JSONL/NDJSON and Parquet")
+    if Path(name).suffix.lower() not in UPLOADABLE:
+        raise HTTPException(415, "Supported files: CSV, Excel, JSON, Parquet, PDF, Word, text, Markdown, email, "
+                                 "HTML and images")
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "The file is larger than 25 MB")
@@ -155,7 +160,17 @@ async def upload_source_file(project_id: str, file: UploadFile = File(...)) -> d
     folder = source_files_dir() / upload_id
     folder.mkdir(parents=True)
     (folder / name).write_bytes(content)
-    return {"file": f"{upload_id}/{name}", "name": name}
+    if not is_document(name):
+        return {"file": f"{upload_id}/{name}", "name": name, "note": None}
+    try:
+        rows = ai_call(lambda: read_any(folder / name, name))
+    except HTTPException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    table = f"{Path(name).stem}.csv"
+    rows.to_csv(folder / table, index=False)
+    return {"file": f"{upload_id}/{table}", "name": name,
+            "note": f"Read {name}: {len(rows):,} record(s) with {len(rows.columns)} fields."}
 
 
 def _file_sample() -> Dict[str, Any]:

@@ -103,17 +103,14 @@ class GoogleDriveSource:
 @register
 class DriveFile(Source):
     kind, label, group = "google_drive", "Google Drive", "Files & links"
-    description = "A CSV, JSON, Parquet or Excel file shared as 'Anyone with the link can view'."
+    description = "A CSV, Excel, JSON or Parquet file, or a document, shared as 'Anyone with the link can view'."
     requires = ("httpx",)
     fields = (Field("url", "Share link", "https://drive.google.com/file/d/…/view"),)
 
     def _table(self, settings) -> pd.DataFrame:
-        import tempfile
+        from datapulse.sources.connected import download  # data files and documents alike; temp folder removed
 
-        from datapulse.io import load_dataframe
-
-        path = GoogleDriveSource().fetch({"url": settings["url"]}, {}, Path(tempfile.mkdtemp()))
-        return load_dataframe(path)
+        return download(GoogleDriveSource(), {"url": settings["url"]}, {}, "the Google Drive file")
 
     def test(self, settings):
         df = self._table(settings)
