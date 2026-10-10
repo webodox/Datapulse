@@ -7,9 +7,9 @@ import { SourceNote, SourcesTab, UnifiedNote } from './sources'
 import { Icon, type IconName } from './icons'
 import { CodeBlock, copyText, Dropzone, Empty, Spinner, useAction, useNotify } from './ui'
 
-export const TABS = ['checks', 'sources', 'baseline', 'rules', 'api'] as const
+export const TABS = ['sources', 'checks', 'baseline', 'rules', 'api'] as const
 export type Tab = typeof TABS[number]
-const TAB_LABEL: Record<Tab, string> = { checks: 'Checks', sources: 'Sources', baseline: 'Baseline', rules: 'Rules', api: 'Send data' }
+const TAB_LABEL: Record<Tab, string> = { sources: 'Sources', checks: 'Checks', baseline: 'Standard', rules: 'Rules', api: 'Send data' }
 const SEVERITY_ICON: Record<Severity, IconName> = { critical: 'alert', warning: 'flag', info: 'info' }
 const FAIL_ON: Record<string, string> = {
   critical: 'Fails on critical issues', warning: 'Fails on warnings or worse', info: 'Fails on any issue', never: 'Never fails',
@@ -38,7 +38,7 @@ export function ProjectView({ route, go, onChanged, apiKey, dismissKey, ai }: Pr
   const changed = () => reload().then(onChanged)
   const remove = async () => {
     if (!window.confirm(`Delete "${detail.name}" with its baseline and ${plural(detail.runs.length, 'check')}? This can't be undone.`)) return
-    try { await api.remove(detail.id); await onChanged(); go({ tab: 'checks' }); notify.ok(`Deleted ${detail.name}`) } catch (e) { notify.fail(e) }
+    try { await api.remove(detail.id); await onChanged(); go({ tab: 'sources' }); notify.ok(`Deleted ${detail.name}`) } catch (e) { notify.fail(e) }
   }
 
   return <div className="project">
@@ -46,7 +46,7 @@ export function ProjectView({ route, go, onChanged, apiKey, dismissKey, ai }: Pr
       <div>
         <h1>{detail.name}</h1>
         <p className="status-line">
-          {!detail.has_baseline ? <><i className="dot" /> Waiting for a baseline</>
+          {!detail.has_baseline ? <><i className="dot" /> Waiting for a standard: pick a source on the Sources tab</>
             : latest ? <><i className={`dot ${latest.status}`} /> {TONE_LABEL[runTone(latest)]} · last checked {timeAgo(latest.created_at)}</>
             : <><i className="dot" /> Ready for its first check</>}
           <span className="sep">·</span>{FAIL_ON[detail.fail_on]}
@@ -85,11 +85,11 @@ function ChecksTab({ detail, runId, select, changed, ai }: { detail: ProjectDeta
   const [useAi, setUseAi] = useState(false)
 
   if (!detail.has_baseline) return <div className="card setup">
-    <span className="step">Step 1 of 2</span>
-    <h2>Start with a file you trust</h2>
-    <p className="muted">DataPulse profiles it (columns, types, null rates, value ranges) and compares every future upload against that profile.</p>
+    <h2>Set the standard format first</h2>
+    <p className="muted">Usually you <a href={`#/p/${detail.id}/sources`}>connect a source</a> and use it as the standard.
+      You can also upload a file you trust: DataPulse learns its columns, types and value ranges, and converts and checks everything against it.</p>
     <Dropzone title="Drop your known-good data file" hint="CSV, JSON, JSONL or Parquet · up to 25 MB" busy={busy && 'Profiling your data…'}
-      onFile={f => run('baseline', async () => { await api.upload(detail.id, 'baseline', f); await changed(); notify.ok('Baseline saved. Now upload a new version to check it.') })} />
+      onFile={f => run('baseline', async () => { await api.upload(detail.id, 'baseline', f); await changed(); notify.ok('Standard saved. Now connect sources or upload a new version to check it.') })} />
   </div>
 
   const viewed = detail.runs.find(r => r.id === runId) || detail.runs[0]
@@ -244,7 +244,7 @@ function InvestigateSection({ run, projectId, ai, changed, select }:
     notify.ok(`Fixed file checked: ${plural(report.issues.length, 'issue')} left`)
   })
   const button = <button className="button primary" disabled={!ai || !!busy} onClick={investigate}>
-    {busy === 'investigate' ? <Spinner text="Investigating…" /> : <><Icon name="sparkle" size={14} /> {triage || fix ? 'Finish the investigation' : 'Investigate with AI'}</>}
+    {busy === 'investigate' ? <Spinner text="Investigating…" /> : <><Icon name="sparkle" size={14} /> {triage && !fix ? 'Repair a copy with AI' : fix && !triage ? 'Diagnose with AI' : 'Investigate with AI'}</>}
   </button>
 
   if (!triage && !fix) return <div className="triage-cta">
@@ -300,7 +300,7 @@ function InvestigateSection({ run, projectId, ai, changed, select }:
         <ol>{triage.steps.map((s, i) => <li key={i}><code>{s.tool}</code>{Object.values(s.input).length > 0 && ` ${Object.values(s.input).join(', ')}`}</li>)}</ol>
       </details>
     </>}
-    {(!triage || !fix) && <div className="actions"><small className="muted">{triage ? 'The repair' : 'The diagnosis'} didn't finish last time.</small>{button}</div>}
+    {(!triage || !fix) && <div className="actions"><small className="muted">{triage ? 'No repaired copy yet.' : 'No diagnosis yet.'}</small>{button}</div>}
   </section>
 }
 
@@ -334,7 +334,7 @@ function BaselineTab({ detail, changed }: { detail: ProjectDetail; changed: () =
   const [busy, run] = useAction()
   const [query, setQuery] = useState('')
   const b = detail.baseline
-  if (!b) return <Empty icon="database" title="No baseline yet"><a className="button primary" href={`#/p/${detail.id}/checks`}>Add one</a></Empty>
+  if (!b) return <Empty icon="database" title="No standard yet"><span>The standard is the format every source is converted to.</span><a className="button primary" href={`#/p/${detail.id}/sources`}>Pick a source</a></Empty>
   const columns = Object.entries(b.columns).filter(([name]) => name.toLowerCase().includes(query.trim().toLowerCase()))
 
   const replace = (file: File) => {
@@ -364,7 +364,7 @@ function BaselineTab({ detail, changed }: { detail: ProjectDetail; changed: () =
       </table>{!columns.length && <p className="muted pad">No columns match "{query}".</p>}</div>
     </div>
     <div className="card">
-      <h2>Replace the baseline</h2>
+      <h2>Replace the standard with a file</h2>
       <p className="muted">Do this after an intentional change to the data. The version number goes up and older checks keep their results.</p>
       <Dropzone title="Drop the new known-good file" hint="You'll be asked to confirm" busy={busy && 'Profiling…'} onFile={replace} />
     </div>

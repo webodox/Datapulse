@@ -50,7 +50,12 @@ copy `.env.example` to `.env`, put your key in it, then `docker compose up --bui
 
 ## Data sources and unified data
 
-The **Sources** tab connects a project to where its data lives, so nobody downloads and uploads files:
+This is DataPulse's main job: the same data lives in many places, each in its own format, and DataPulse turns it
+into one checked table. **Try it with sample data** creates a project with three sample databases (a warehouse, a
+store system that keeps amounts in cents, and an online shop that stores prices as text) to map and unify.
+
+The **Sources** tab (the first tab of every project) connects a project to where its data lives, so nobody
+downloads and uploads files:
 
 | Group | Sources |
 |---|---|

@@ -141,16 +141,16 @@ class OtherSQL(SQLDatabase):
 @register
 class SQLite(SQLDatabase):
     kind, label = "sqlite", "SQLite file"
-    description = "A .sqlite/.db file on the server, inside the folder set by DATAPULSE_SQLITE_DIR."
+    description = "A .sqlite/.db file on the server, inside a folder listed in DATAPULSE_SQLITE_DIR."
     fields = (Field("path", "File path", "/data/shared/sales.db"), QUERY_FIELD)
 
     def url(self, settings):
         from sqlalchemy.engine import URL
 
-        allowed = os.getenv("DATAPULSE_SQLITE_DIR")
-        if not allowed:
+        roots = [Path(d).resolve() for d in os.getenv("DATAPULSE_SQLITE_DIR", "").split(os.pathsep) if d]
+        if not roots:
             raise SourceError("SQLite files are off. Set DATAPULSE_SQLITE_DIR on the server to the folder they live in.")
-        root, path = Path(allowed).resolve(), Path(settings["path"]).expanduser().resolve()
-        if root not in path.parents or not path.is_file():
-            raise SourceError(f"No SQLite file at that path inside {root}.")
+        path = Path(settings["path"]).expanduser().resolve()
+        if not any(root in path.parents for root in roots) or not path.is_file():
+            raise SourceError(f"No SQLite file at that path inside {', '.join(map(str, roots))}.")
         return URL.create("sqlite", database=f"file:{path}?mode=ro", query={"uri": "true"})

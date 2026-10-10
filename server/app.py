@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import sqlite3
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -29,22 +30,22 @@ from datapulse.ai import draft_rules, get_api_key
 from datapulse.config import STARTER_CONFIG, Config
 from datapulse.errors import DataPulseError
 from datapulse.fix import RepairSession, run_repair
-from datapulse.io import load_dataframe
 from datapulse.profile import profile_dataframe
 from datapulse.suggest import render_yaml, suggest_rules
 from datapulse.unify import SOURCE_COLUMN
 
 from .auth import current_user, needs_login, router as auth_router
 from .core import (MAX_INGEST_ROWS, MAX_UPLOAD_BYTES, ROOT, ai_call, baseline_summary, dataset_rows, handle_data,
-                   loads, project_config, project_row, record_dataset, run_check, save_baseline, save_upload,
+                   loads, project_config, project_row, record_dataset, run_check, save_upload,
                    load_upload)
-from .db import connect, init_db, now_iso, upload_dir
-from .sources import router as sources_router
+from .db import allow_sample_sources, connect, init_db, now_iso, samples_dir, upload_dir
+from .sources import add_sample_sources, router as sources_router
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    allow_sample_sources()
     yield
 
 
@@ -210,6 +211,7 @@ def delete_project(project_id: str) -> dict:
     for f in files:
         if f.parent == uploads:
             f.unlink(missing_ok=True)
+    shutil.rmtree(samples_dir() / project_id, ignore_errors=True)
     return {"deleted": True}
 
 
@@ -229,12 +231,12 @@ def ingest_rows(project_id: str, payload: IngestRows, x_datapulse_key: Optional[
 
 
 @app.post("/api/demo/seed")
-def seed_demo() -> dict:
-    """A sample project: the example orders data, its baseline and its datapulse.yml."""
-    sample = ROOT / "examples" / "data" / "orders.csv"
+def seed_demo(request: Request) -> dict:
+    """A sample project: three databases holding the same orders in different formats (the first is the
+    standard), with the example datapulse.yml."""
     config_text = (ROOT / "examples" / "datapulse.yml").read_text(encoding="utf-8")
-    project = _create_project("Orders pipeline", config_text)
-    save_baseline(project_row(project["id"]), sample.name, sample, load_dataframe(sample))
+    project = _create_project("Orders (sample)", config_text)
+    add_sample_sources(project["id"], request.state.user["name"])
     return {**project, "has_baseline": True}
 
 

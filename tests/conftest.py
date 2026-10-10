@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from datapulse.baseline import build_baseline
+from datapulse.samples import store_system
 from datapulse.config import Config, parse_config
 
 
@@ -57,11 +59,7 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
-def shop_shape(df: pd.DataFrame) -> pd.DataFrame:
-    """The same orders as another system stores them: other names, cents, capitals, an extra column."""
-    return pd.DataFrame({"OrderID": df.order_id + 50_000, "Customer ID": df.customer_id, "STATUS": df.status.str.upper(),
-                         "amount_cents": (df.amount * 100).round(), "Quantity": df.quantity, "Country": df.country,
-                         "Created_At": df.created_at, "warehouse": "W1"})
+shop_shape = store_system  # the same orders as another system stores them
 
 
 @pytest.fixture
@@ -69,7 +67,7 @@ def sqlite_source(tmp_path, monkeypatch):
     """The example orders in shop_shape, as a SQLite data source."""
     monkeypatch.setenv("DATAPULSE_SQLITE_DIR", str(tmp_path))
     path = tmp_path / "shop.db"
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         shop_shape(pd.read_csv(Path(__file__).resolve().parents[1] / "examples/data/orders.csv")).to_sql(
             "store_orders", db, index=False)
     return {"path": str(path), "query": "store_orders"}

@@ -41,22 +41,40 @@ export function SourcesTab({ detail, changed, ai, openRun }:
     notify.ok(`Unified ${plural(report.rows.current, 'row')}: ${report.issues.length ? plural(report.issues.length, 'issue') + ' to review' : 'all clear'}`)
   })
 
+  const lastUnified = detail.runs.find(r => r.report.unified)
+  const steps: Array<[string, boolean]> = [
+    ['Connect your sources', list.length > 0],
+    ['Pick the standard format', detail.has_baseline],
+    ['Map the others to it', list.length > 1 && list.every(s => s.status !== 'needs_mapping')],
+    ['Unify into one table', !!lastUnified],
+  ]
+  const next = steps.findIndex(([, done]) => !done)
+
   return <>
     <div className="card sources-intro">
       <div>
-        <h2>Connect where your data lives</h2>
-        <p className="muted">{!detail.has_baseline
-          ? 'Add a source and use it as the standard: the format every other source is converted to.'
-          : 'Each source is converted to the standard format with its own recipe, then checked. Unify combines them into one table.'}</p>
+        <h2>Unify your data</h2>
+        <ol className="progress">{steps.map(([label, done], i) =>
+          <li key={label} className={done ? 'done' : i === next ? 'next' : ''}><span>{done ? <Icon name="check" size={12} /> : i + 1}</span>{label}</li>)}</ol>
       </div>
       <div className="actions">
-        <button className="button primary" onClick={() => setEditing('new')}><Icon name="plus" size={14} /> Add source</button>
-        {detail.has_baseline && <button className="button outline" disabled={!ready.length || !!busy} onClick={unify}
+        <button className={`button ${list.length ? 'outline' : 'primary'}`} onClick={() => setEditing('new')}><Icon name="plus" size={14} /> Add source</button>
+        {detail.has_baseline && <button className="button primary" disabled={!ready.length || !!busy} onClick={unify}
           title={ready.length ? undefined : 'Map a source first'}>
-          {busy === 'unify' ? <Spinner text="Unifying…" /> : <><Icon name="database" size={14} /> Unify {ready.length > 1 ? `all ${ready.length}` : ''} sources</>}
+          {busy === 'unify' ? <Spinner text="Unifying…" /> : <><Icon name="database" size={14} /> Unify {ready.length > 1 ? `all ${ready.length} sources` : 'sources'}</>}
         </button>}
       </div>
     </div>
+
+    {lastUnified && <div className={`card unified-latest ${lastUnified.status}`}>
+      <span className="source-icon"><Icon name="database" size={18} /></span>
+      <div>
+        <b>Unified table · {lastUnified.report.rows.current.toLocaleString()} rows from {plural(lastUnified.report.unified!.sources.filter(x => !x.error).length, 'source')}</b>
+        <small className="muted">{timeAgo(lastUnified.created_at)} · {lastUnified.issue_count ? plural(lastUnified.issue_count, 'issue') + ' to review' : 'all checks passed'}</small>
+      </div>
+      <button className="button ghost" onClick={() => openRun(lastUnified.id)}>Open report</button>
+      <a className="button outline" href={api.runDataUrl(detail.id, lastUnified.id)}><Icon name="download" size={14} /> Download</a>
+    </div>}
 
     {list.length === 0 ? <Empty icon="plug" title="No sources yet">
       <span>PostgreSQL, MySQL, SQL Server, MongoDB, Google Sheets, file links and more.</span>

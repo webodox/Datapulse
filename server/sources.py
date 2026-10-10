@@ -14,11 +14,13 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from datapulse.errors import DataPulseError
+from datapulse.io import load_dataframe
+from datapulse.samples import write_samples
 from datapulse.sources import catalog, clean_settings, fetch_source, public_settings, try_connection
 from datapulse.unify import SOURCE_COLUMN, apply_recipe, combine, propose_mapping, validate_recipe
 
-from .core import ai_call, dataset_rows, loads, project_config, project_row, run_check, save_baseline
-from .db import connect, now_iso, upload_dir
+from .core import ROOT, ai_call, dataset_rows, loads, project_config, project_row, run_check, save_baseline
+from .db import allow_sample_sources, connect, now_iso, samples_dir, upload_dir
 
 router = APIRouter(prefix="/api")
 
@@ -86,6 +88,34 @@ def _update(source_id: str, **values) -> None:
                    (*values.values(), source_id))
 
 
+def _create(project_id: str, name: str, kind: str, settings: Dict[str, str], actor: str) -> str:
+    source_id = uuid.uuid4().hex[:12]
+    with connect() as db:
+        db.execute("INSERT INTO sources (id, project_id, name, kind, settings_json, created_by, created_at) "
+                   "VALUES (?, ?, ?, ?, ?, ?, ?)", (source_id, project_id, name, kind, json.dumps(settings), actor, now_iso()))
+    return source_id
+
+
+def _make_standard(project: sqlite3.Row, row: sqlite3.Row, df: pd.DataFrame) -> Dict[str, Any]:
+    """This source's format becomes the project's standard (its baseline)."""
+    result = save_baseline(project, row["name"], _store(df), df)
+    with connect() as db:
+        db.execute("UPDATE sources SET is_standard = 0 WHERE project_id = ?", (project["id"],))
+    _update(row["id"], is_standard=1, recipe_json=json.dumps([]), proposal_json=None, last_pulled_at=now_iso())
+    return result
+
+
+def add_sample_sources(project_id: str, actor: str) -> None:
+    """Three sample databases holding the same orders in different formats; the first one is the standard."""
+    allow_sample_sources()
+    orders = load_dataframe(ROOT / "examples" / "data" / "orders.csv")
+    for n, sample in enumerate(write_samples(orders, samples_dir() / project_id)):
+        source_id = _create(project_id, sample["name"], "sqlite", {"path": sample["path"], "query": sample["query"]}, actor)
+        if n == 0:
+            row = _source(project_id, source_id)
+            _make_standard(project_row(project_id), row, _fetch(row))
+
+
 @router.get("/sources/catalog")
 def source_catalog() -> list:
     return catalog()
@@ -119,11 +149,7 @@ def add_source(project_id: str, payload: SourceForm, request: Request) -> dict:
         settings = clean_settings(payload.kind, payload.settings)
     except DataPulseError as exc:
         raise _fail(exc) from exc
-    source_id = uuid.uuid4().hex[:12]
-    with connect() as db:
-        db.execute("INSERT INTO sources (id, project_id, name, kind, settings_json, created_by, created_at) "
-                   "VALUES (?, ?, ?, ?, ?, ?, ?)", (source_id, project_id, payload.name.strip(), payload.kind,
-                                                    json.dumps(settings), request.state.user["name"], now_iso()))
+    source_id = _create(project_id, payload.name.strip(), payload.kind, settings, request.state.user["name"])
     return _public(_source(project_id, source_id))
 
 
@@ -192,11 +218,7 @@ def pull_source(project_id: str, source_id: str, payload: Pull, request: Request
     df = _fetch(row)
     actor = request.state.user["name"]
     if payload.role == "baseline":
-        result = save_baseline(project, row["name"], _store(df), df)
-        with connect() as db:
-            db.execute("UPDATE sources SET is_standard = 0 WHERE project_id = ?", (project_id,))
-        _update(source_id, is_standard=1, recipe_json=json.dumps([]), proposal_json=None, last_pulled_at=now_iso())
-        return result
+        return _make_standard(project, row, df)
     recipe = loads(row["recipe_json"])
     mapped, effects, problems = apply_recipe(df, json.loads(project["baseline_json"])["profile"], recipe or [])
     extra = {"source": {"id": row["id"], "name": row["name"], "kind": row["kind"], "rows_pulled": len(df),

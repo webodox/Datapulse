@@ -116,6 +116,9 @@ def test_bad_uploads_are_rejected_and_not_kept(client, project, tmp_path):
 def test_suggestions_and_demo_seed(client):
     seeded = client.post("/api/demo/seed").json()
     assert seeded["has_baseline"]
+    sources = client.get(f"/api/projects/{seeded['id']}/sources").json()
+    assert [(s["name"], s["status"]) for s in sources] == [
+        ("Warehouse database", "standard"), ("Store system", "needs_mapping"), ("Online shop", "needs_mapping")]
     detail = client.get(f"/api/projects/{seeded['id']}").json()
     assert {c["name"] for c in detail["consumers"]} >= {"revenue_dashboard", "churn_model"}
     yaml_text = client.get(f"/api/projects/{seeded['id']}/suggestions").json()["yaml"]
@@ -135,11 +138,12 @@ def test_delete_project_removes_its_data_but_not_shared_files(client, project, t
     pid = project["id"]
     client.post(f"/api/projects/{pid}/baseline", files={"file": ("o.csv", _csv(make_df()), "text/csv")})
     client.post(f"/api/projects/{pid}/runs", files={"file": ("o.csv", _csv(make_df()), "text/csv")})
-    seeded = client.post("/api/demo/seed").json()  # its baseline points at examples/, which must survive
+    seeded = client.post("/api/demo/seed").json()  # reads examples/, which must survive
     assert client.delete(f"/api/projects/{pid}").json() == {"deleted": True}
     assert client.get(f"/api/projects/{pid}").status_code == 404
-    assert list((tmp_path / "home" / "uploads").iterdir()) == []
     assert client.delete(f"/api/projects/{seeded['id']}").status_code == 200
+    assert list((tmp_path / "home" / "uploads").iterdir()) == []
+    assert not (tmp_path / "home" / "samples" / seeded["id"]).exists()  # its sample databases too
     assert (ROOT / "examples" / "data" / "orders.csv").exists()
     assert client.delete(f"/api/projects/{pid}").status_code == 404
     assert client.get("/api/projects").json() == []

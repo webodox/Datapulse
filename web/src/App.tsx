@@ -11,7 +11,7 @@ export type Route = { id?: string; tab: Tab; run?: string; account?: boolean }
 function parseHash(): Route {
   if (window.location.hash.startsWith('#/account')) return { tab: 'checks', account: true }
   const [, id, tab, run] = window.location.hash.match(/^#\/p\/([\w-]+)(?:\/(\w+))?(?:\/([\w-]+))?/) || []
-  return { id, tab: TABS.includes(tab as Tab) ? tab as Tab : 'checks', run }
+  return { id, tab: TABS.includes(tab as Tab) ? tab as Tab : 'sources', run }
 }
 
 function useRoute() {
@@ -65,13 +65,13 @@ function Shell({ user, signOut }: { user: User; signOut: () => void }) {
 
   // Land on the first project when the URL doesn't name one that exists.
   useEffect(() => {
-    if (!route.account && projects?.length && !projects.some(p => p.id === route.id)) go({ id: projects[0].id, tab: 'checks' }, true)
+    if (!route.account && projects?.length && !projects.some(p => p.id === route.id)) go({ id: projects[0].id, tab: 'sources' }, true)
   }, [projects, route.id, route.account, go])
 
   const opened = useCallback((created: Created) => {
     setNewKey({ id: created.id, key: created.api_key })
     setCreating(false)
-    refresh().then(() => go({ id: created.id, tab: 'checks' }))
+    refresh().then(() => go({ id: created.id, tab: 'sources' }))
   }, [refresh, go])
 
   const active = projects?.find(p => p.id === route.id)
@@ -81,10 +81,10 @@ function Shell({ user, signOut }: { user: User; signOut: () => void }) {
       <div className="brand"><span className="logo"><Icon name="activity" size={18} /></span>DataPulse</div>
       <button className="button primary full" onClick={() => setCreating(true)} disabled={offline}><Icon name="plus" size={15} /> New project</button>
       <nav className="project-list" aria-label="Projects">
-        {projects?.map(p => <a key={p.id} href={`#/p/${p.id}/checks`} className={`project-link ${p.id === route.id ? 'active' : ''}`}
+        {projects?.map(p => <a key={p.id} href={`#/p/${p.id}/sources`} className={`project-link ${p.id === route.id ? 'active' : ''}`}
           aria-current={p.id === route.id ? 'page' : undefined}>
           <i className={`dot ${p.latest_status || ''}`} title={p.latest_status ? `Last check ${p.latest_status}` : 'No checks yet'} />
-          <span><b>{p.name}</b><small>{p.has_baseline ? plural(p.run_count, 'check') : 'Needs a baseline'}</small></span>
+          <span><b>{p.name}</b><small>{p.has_baseline ? plural(p.run_count, 'check') : 'Needs a standard'}</small></span>
         </a>)}
       </nav>
       <div className="sidebar-foot">
@@ -112,7 +112,7 @@ function Shell({ user, signOut }: { user: User; signOut: () => void }) {
     </main>
 
     {creating && <Modal title="New project" onClose={() => setCreating(false)}>
-      <p className="muted">A project holds one dataset's baseline, rules and check history.</p>
+      <p className="muted">A project unifies one kind of data, such as orders or patients, from all the places it lives.</p>
       <CreateProject onCreated={opened} autoFocus />
     </Modal>}
   </div>
@@ -132,20 +132,20 @@ function Welcome({ onCreated }: { onCreated: (c: Created) => void }) {
   const [busy, run] = useAction()
   const notify = useNotify()
   return <div className="center-card wide">
-    <h1>Your AI data-quality engineer</h1>
-    <p>DataPulse catches bad data before it reaches your dashboards and models, then does the on-call
-      work for you: it finds the likely cause, says whether to block the release, and writes the message to
-      the people affected.</p>
+    <h1>All your data, in one format, checked</h1>
+    <p>The same data lives in many places, each in its own shape: a PostgreSQL database, a MySQL store system,
+      MongoDB, a Google Sheet. DataPulse connects to all of them, converts each one to a single standard format,
+      and combines them into one clean table, checked on every pull.</p>
     <ol className="how">
-      <li><b>Save a baseline</b><span>Upload a file you trust. DataPulse learns what normal looks like.</span></li>
-      <li><b>Check every new batch</b><span>Rules plus a machine-learning drift model spot what changed, even subtle shifts.</span></li>
-      <li><b>Let the AI agent triage</b><span>It investigates, ranks root causes, and drafts the fix plan and message.</span></li>
+      <li><b>Connect your sources</b><span>Databases, spreadsheets and file links. Passwords stay on the server; access is read-only.</span></li>
+      <li><b>AI maps each one to your standard</b><span>Renamed columns, cents vs. dollars, numbers stored as text. You approve once; every later pull converts automatically.</span></li>
+      <li><b>Get one unified, checked table</b><span>Rules and an ML drift model catch problems. AI investigates them and repairs a copy.</span></li>
     </ol>
     <div className="welcome-actions">
       <CreateProject onCreated={onCreated} />
       <div className="or">or</div>
       <button className="button outline" disabled={!!busy} onClick={() => run('seed', async () => {
-        onCreated(await api.seed()); notify.ok('Sample project ready. Try uploading examples/data/orders_drifted.csv.')
+        onCreated(await api.seed()); notify.ok('Sample project ready: 3 connected sources. Map the two that need it, then Unify.')
       })}>{busy ? <Spinner text="Loading…" /> : <><Icon name="sparkle" size={15} /> Try it with sample data</>}</button>
     </div>
   </div>
