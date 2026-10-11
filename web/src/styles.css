@@ -180,11 +180,9 @@ em.failed { color: var(--crit-text) } em.issues { color: var(--warn-text) } em.c
 .verdict > div { flex: 1; min-width: 0 }
 .verdict p { color: var(--muted); font-size: 14px; overflow-wrap: anywhere }
 .verdict.failed h2 { color: var(--crit-text) } .verdict.issues h2 { color: var(--warn-text) } .verdict.clean h2 { color: var(--good-text) }
-.filters { display: flex; gap: 6px; flex-wrap: wrap }
-.filters button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--surface); border-radius: 99px; padding: 5px 12px; font-size: 13.5px; font-weight: 600; text-transform: capitalize }
-.filters button.on { background: var(--ink); border-color: var(--ink); color: var(--bg) }
-.filters .critical .icon { color: var(--crit) } .filters .warning .icon { color: var(--warn) } .filters .info .icon { color: var(--info) }
-.filters .on .icon { color: inherit }
+.issue-count { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 14.5px }
+.blocking-count { display: inline-flex; align-items: center; gap: 6px; color: var(--crit-text); font-weight: 600 }
+.toggle.inline { margin: 0; font-weight: 500; color: var(--ink-2) }
 
 .overview { display: grid; gap: 10px; padding: 14px 16px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--ai) 30%, var(--border)); background: linear-gradient(180deg, var(--ai-soft), var(--surface) 140px) }
 .overview > header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
@@ -209,7 +207,7 @@ em.failed { color: var(--crit-text) } em.issues { color: var(--warn-text) } em.c
 .issue-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden }
 .issue-row { border-left: 3px solid var(--border-strong) }
 .issue-row + .issue-row { border-top: 1px solid var(--border) }
-.issue-row.critical { border-left-color: var(--crit) } .issue-row.warning { border-left-color: var(--warn) } .issue-row.info { border-left-color: var(--info) }
+.issue-row.blocking { border-left-color: var(--crit) }
 .issue-row.open { background: var(--surface-2) }
 .issue-line { width: 100%; display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 12px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer }
 .issue-line:hover { background: var(--surface-2) }
@@ -218,7 +216,7 @@ em.failed { color: var(--crit-text) } em.issues { color: var(--warn-text) } em.c
 .issue-meta { color: var(--muted); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
 .issue-line .issue-chevron { color: var(--muted) }
 .sev { width: 8px; height: 8px; border-radius: 99px; background: var(--border-strong) }
-.sev.critical { background: var(--crit) } .sev.warning { background: var(--warn) } .sev.info { background: var(--info) }
+.sev.blocking { background: var(--crit) }
 .issue-chevron { transition: transform .2s ease }
 .issue-chevron.open { transform: rotate(180deg) }
 .issue-more { display: flex; align-items: center; justify-content: space-between; gap: 10px }
