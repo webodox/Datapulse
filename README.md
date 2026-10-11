@@ -1,24 +1,53 @@
 # DataPulse
 
-An AI data-quality engineer for your pipelines. DataPulse catches data changes that would break dashboards,
-services or ML models, then does the on-call work: it investigates, says whether to block the release, ranks the
-likely causes, writes the fix checklist and drafts the message to the people affected.
+**Unify data from any database into one clean, trusted table.** Every company keeps the same kind of data in many
+places: a warehouse in PostgreSQL, a store system in MySQL, spreadsheets and documents from partners. Each one names
+columns differently, uses other units and formats, and drifts over time. DataPulse connects to every source, uses AI
+to convert each one to your standard format, checks the combined result, and writes it into your own database. Data
+that fails its checks is held back, so it never breaks a dashboard, service or ML model.
+
+**Live demo:** https://datapulse-production-743a.up.railway.app (invite-only sign-in with Auth0).
+
+How it works:
+
+1. **Connect your sources**: any database by its connection URL, an uploaded file or document, a link, Google
+   Drive, a REST API or a web page.
+2. **Pick the standard**: one source's format (columns, types, units) becomes the format everything is converted to.
+3. **AI maps the others to it**: Claude proposes each conversion (renames, cents to dollars, numbers stored as text,
+   spellings) with a reason for every step. A person approves it once; after that it replays without AI.
+4. **Unify**: all sources are pulled, converted, combined and checked, then sent to your database.
+
+What checks the data:
 
 - **Rules** (schema, nulls, row counts, duplicates, categories, distributions) run offline and deterministically.
 - **An ML drift model** learns to tell new rows from trusted rows and names the columns that changed, including
   shifts in how columns relate to each other that no single-column rule can see. Runs locally, no API key.
-- **An AI triage agent** (Claude, with tools) investigates each failure and writes the incident note.
-- **A rules assistant** turns "order_id must be unique and alert if amount shifts" into a validated `datapulse.yml`.
+- **An AI overview** on every failed check says what went wrong and what to look at first.
+- **AI agents with tools** (Claude) map sources, triage failures and repair data, using a fixed set of safe operations.
+- **Auth0 sign-in** keeps it invite-only: Auth0 verifies who someone is, and only people the admin adds get in.
+
+## Built with
+
+| Part | Technology |
+|---|---|
+| AI | Claude (Anthropic API) with tool use: mapping, triage and repair agents, AI overview, rules assistant |
+| ML | scikit-learn random forest drift model (runs locally) |
+| Backend | Python, FastAPI, pandas, SQLAlchemy, SQLite for app data |
+| Databases | PostgreSQL, MySQL / MariaDB, SQL Server, MongoDB, SQLite and any SQLAlchemy database |
+| Frontend | React, TypeScript, Vite |
+| Sign-in | Auth0 (OpenID Connect with PKCE) |
+| Hosting | Docker on Railway |
 
 ## AI and ML features
 
 | Feature | What it takes off your plate | Where | Needs |
 |---|---|---|---|
 | ML drift model (`ml_drift` check) | Spotting subtle or multi-column drift and pointing at the columns responsible | Dashboard (automatic), `check --reference good.csv` | nothing; runs locally |
-| Investigate with AI | One button, two agents in parallel. The triage agent handles the first hour of an incident (root cause, block-or-ship call, fix steps, who to tell, the message); the repair agent fixes a copy (rescales units, converts text back to numbers, removes duplicates, standardizes spellings) and re-runs every check to prove it worked | `check --triage`, `datapulse fix data.csv -o fixed.csv`, or the REST API (`/runs/{id}/investigate`); the dashboard shows a short AI overview instead | `ANTHROPIC_API_KEY` |
 | AI source mapping | Converting each new data source to your standard format: renamed columns, other units, numbers stored as text, different spellings. Approved once, then replayed on every load without AI | Dashboard **Sources** tab | `ANTHROPIC_API_KEY` (name matching works without it) |
+| AI overview | On a failed check: a short summary of what went wrong and the first things to look at, written once per check from statistics only | Dashboard **Results** tab (automatic) | `ANTHROPIC_API_KEY` (a plain count-based summary without it) |
+| Triage and repair agents | Two agents in parallel. The triage agent handles the first hour of an incident (root cause, block-or-ship call, fix steps, who to tell, the message); the repair agent fixes a copy (rescales units, converts text back to numbers, removes duplicates, standardizes spellings) and re-runs every check to prove it worked | `check --triage`, `datapulse fix data.csv -o fixed.csv`, or the REST API (`/runs/{id}/investigate`) | `ANTHROPIC_API_KEY` |
 | Before/after charts | Seeing a shift instantly: each column's value ranges and empty rates, baseline vs. new file | Dashboard, on each issue | nothing |
-| Rules assistant | Writing and debugging YAML; drafts are validated and self-corrected before you see them | Dashboard Rules tab, `datapulse draft-rules "..."` | `ANTHROPIC_API_KEY` |
+| Rules assistant | Writing and debugging YAML; drafts are validated and self-corrected before you see them | Dashboard **Settings** tab, `datapulse draft-rules "..."` | `ANTHROPIC_API_KEY` |
 | Issue explanations | A hedged hypothesis per issue | `check --ai`, dashboard toggle | `ANTHROPIC_API_KEY` |
 
 **How the drift model works.** It samples up to `max_rows` rows from each file and trains a random forest to
@@ -57,7 +86,7 @@ store system that keeps amounts in cents, and an online shop that stores prices 
 The **Sources** tab (the first tab of every project) connects a project to where its data lives, so nobody
 downloads and uploads files:
 
-**Add source** offers three choices:
+**Add source** offers these choices:
 
 | Choice | What you give it |
 |---|---|
@@ -149,7 +178,16 @@ uvicorn server.app:app --reload --port 8000
 cd web && npm install && npm run dev    # http://localhost:5173 (proxies /api to port 8000)
 ```
 
-In the dashboard: create a project (or **Try it with sample data**), drop a known-good file to save the baseline, then drop each new version to check it; the check starts as soon as the file lands. Each project has three tabs: **Sources** (connect, map, unify and send to your database; quick-check a file), **Results** (every check with its report and the AI investigation) and **Settings** (the standard format's column profile and how to replace it, plus the rules: the project's `datapulse.yml`, with `datapulse suggest` output to copy from; nothing is applied). Uploads accept CSV, JSON (an array of row objects), JSONL/NDJSON and Parquet, up to 25 MB.
+In the dashboard: create a project (or **Try it with sample data**), add your sources, pick one as the standard, map
+the others and click **Unify sources**. To check a single file against the standard without adding it as a source,
+use **Quick check a file**; the check starts as soon as the file lands (CSV, JSON, JSONL/NDJSON or Parquet, up to
+25 MB). Each project has three tabs:
+
+| Tab | What's there |
+|---|---|
+| **Sources** | Connect sources, pick the standard, map, unify, and send the result to your database; quick-check a file |
+| **Results** | Every check (pulls, unifies, quick checks) with its report: an AI overview, the issues split into blocking and not blocking, before/after charts, and an **Open / Resolved** status |
+| **Settings** | The standard format (column profile; replace it with a file after an intentional change) and the rules: the project's `datapulse.yml`, the plain-English rules assistant and suggestions to copy from |
 
 **Sending data from any language.** Creating a project through the API returns an API key once (only its hash is stored); the dashboard doesn't show it.
 Any service that can make an HTTP request can send rows:
@@ -174,11 +212,11 @@ the same projects, checks and AI triage, and only that one server needs an `ANTH
 
 1. On a machine everyone can reach (a server, a cloud VM, or one teammate's computer on the office network), put
    the key in `.env` and run `docker compose up -d --build`.
-2. Open `http://<that-machine>:8080`. The first person to open a fresh install creates the **admin** account.
-3. The admin adds teammates under **Account & team** (name, email, temporary password). Teammates sign in and can
-   change their password there.
-4. On a failed check, anyone can set **Open / Acknowledged / Resolved**; the dashboard shows who did it and when,
-   who ran each check, and who requested each AI triage.
+2. Open `http://<that-machine>:8080`. The first person to sign in on a fresh install becomes the **admin**.
+3. The admin adds teammates under **Account & team**: name and email (plus a temporary password when Auth0 is off).
+   With Auth0, teammates sign in with Google or email using that address.
+4. On a failed check, anyone can mark it **Open** or **Resolved**; the dashboard shows who did it and when, and who
+   ran each check.
 
 ### Deploying to the cloud (one permanent link for everyone)
 
@@ -187,10 +225,11 @@ projects, checks) on a volume at `/data`. `railway.json` configures [Railway](ht
 
 1. In Railway: **New Project → Deploy from GitHub repo** → pick this repository (and the branch to deploy).
 2. On the service, open **Variables** and add `ANTHROPIC_API_KEY` (your key) and `DATAPULSE_SECURE_COOKIES=1`.
-   Add `ANTHROPIC_WORKSPACE_ID` only if your key isn't tied to a workspace.
+   Add `ANTHROPIC_WORKSPACE_ID` only if your key isn't tied to a workspace. For Auth0 sign-in, also add
+   `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET` (see "Sign in with Auth0" below).
 3. Right-click the service → **Attach volume**, mount path `/data`. Without it, data is lost on every redeploy.
-4. **Settings → Networking → Generate Domain**. Open that `https://...up.railway.app` link; the first person to open
-   it creates the admin account, then adds teammates under **Account & team**.
+4. **Settings → Networking → Generate Domain** (or **Custom Domain** for your own domain). Open that link; the first
+   person to sign in becomes the admin, then adds teammates under **Account & team**.
 
 Every push to the deployed branch redeploys automatically. Any other host that runs a Dockerfile and offers a
 persistent volume works the same way (Fly.io, Render with a disk, a VM with `docker run -p 80:8000 -v dp:/data`).
