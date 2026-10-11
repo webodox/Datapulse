@@ -11,7 +11,8 @@ export type Route = { id?: string; tab: Tab; run?: string; account?: boolean }
 function parseHash(): Route {
   if (window.location.hash.startsWith('#/account')) return { tab: 'checks', account: true }
   const [, id, tab, run] = window.location.hash.match(/^#\/p\/([\w-]+)(?:\/(\w+))?(?:\/([\w-]+))?/) || []
-  return { id, tab: TABS.includes(tab as Tab) ? tab as Tab : 'sources', run }
+  const tabName = ['baseline', 'rules'].includes(tab) ? 'settings' : tab // old links to the Standard and Rules tabs
+  return { id, tab: TABS.includes(tabName as Tab) ? tabName as Tab : 'sources', run }
 }
 
 function useRoute() {
@@ -58,7 +59,6 @@ function Shell({ user, signOut }: { user: User; signOut: () => void }) {
   const [offline, setOffline] = useState(false)
   const [ai, setAi] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [newKey, setNewKey] = useState<{ id: string; key: string } | null>(null)
 
   const refresh = useCallback(() => api.projects().then(list => { setProjects(list); setOffline(false) }, () => setOffline(true)), [])
   useEffect(() => { refresh(); api.health().then(h => setAi(h.ai), () => {}) }, [refresh])
@@ -69,7 +69,6 @@ function Shell({ user, signOut }: { user: User; signOut: () => void }) {
   }, [projects, route.id, route.account, go])
 
   const opened = useCallback((created: Created) => {
-    setNewKey({ id: created.id, key: created.api_key })
     setCreating(false)
     refresh().then(() => go({ id: created.id, tab: 'sources' }))
   }, [refresh, go])
@@ -107,8 +106,7 @@ function Shell({ user, signOut }: { user: User; signOut: () => void }) {
         : offline ? <Offline retry={refresh} />
         : projects === null ? <div className="loading"><span className="spinner" /> Loading…</div>
         : !projects.length ? <Welcome onCreated={opened} />
-        : active && <ProjectView key={active.id} route={{ ...route, id: active.id }} go={go} onChanged={refresh} ai={ai}
-            apiKey={newKey?.id === active.id ? newKey.key : undefined} dismissKey={() => setNewKey(null)} />}
+        : active && <ProjectView key={active.id} route={{ ...route, id: active.id }} go={go} onChanged={refresh} ai={ai} />}
     </main>
 
     {creating && <Modal title="New project" onClose={() => setCreating(false)}>
