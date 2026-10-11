@@ -296,43 +296,71 @@ function InvestigateSection({ run, projectId, ai, changed, select }:
         : <span className="pill verdict clean"><Icon name="wrench" size={12} /> Repaired copy</span>}
       <small className="muted"><Icon name="sparkle" size={12} /> AI investigation{(triage?.by || fix?.by) && ` · requested by ${triage?.by || fix?.by}`}</small>
     </header>
-    {triage && <><h3>{triage.headline}</h3><p className="muted">{triage.verdict_reason}</p></>}
-    {triage && triage.root_causes.length > 0 && <><h4>What went wrong</h4>
-      <ol className="causes">{triage.root_causes.map((c, i) => <li key={i}><span className={`conf ${c.confidence}`}>{c.confidence}</span>
-        <div><b>{c.hypothesis}</b><small>{c.evidence}</small></div></li>)}</ol></>}
+    {triage && <h3>{triage.headline}</h3>}
 
-    {fix && <>
-      <h4>What the AI fixed</h4>
+    {fix && <div className="fix-summary">
+      <b>AI fixed {plural(fix.operations.length, 'problem')}</b>
       <div className="fix-score">
         <div><small>Issues</small><b>{fix.before.total} <span>→</span> {fix.after.total}</b></div>
         <div><small>Critical</small><b>{fix.before.critical} <span>→</span> {fix.after.critical}</b></div>
         <div><small>Rows</small><b>{fix.rows.before.toLocaleString()} <span>→</span> {fix.rows.after.toLocaleString()}</b></div>
       </div>
-      <p>{fix.summary}</p>
-      {fix.operations.length > 0 && <ol className="causes">{fix.operations.map((op, i) => <li key={i}><span className="conf done">fixed</span>
-        <div><b>{op.effect}</b><small>{op.reason}</small></div></li>)}</ol>}
-      {fix.warnings.map((w, i) => <p key={i} className="note"><Icon name="info" size={13} /> {w}</p>)}
-      <div className="actions">
-        <a className="button primary" href={api.fixedUrl(projectId, run.id)} download={fix.file_name}><Icon name="download" size={14} /> Download {fix.file_name}</a>
-        <button className="button outline" disabled={!!busy} onClick={recheck}>{busy === 'recheck' ? <Spinner text="Checking…" /> : 'Check the fixed file'}</button>
-      </div>
-      {fix.not_fixed.length > 0 && <><h4>Left for a person</h4>
-        <ul className="notify">{fix.not_fixed.map((n, i) => <li key={i}><b>{n.issue}</b> {n.why}</li>)}</ul></>}
-    </>}
+    </div>}
+    <div className="actions">
+      {fix && <a className="button primary" href={api.fixedUrl(projectId, run.id)} download={fix.file_name}><Icon name="download" size={14} /> Download fixed file</a>}
+      {fix && <button className="button outline" disabled={!!busy} onClick={recheck}>{busy === 'recheck' ? <Spinner text="Checking…" /> : 'Check the fixed file'}</button>}
+      {triage && <button className="button ghost" onClick={() => copyText(triage.message, notify, 'Message copied')}><Icon name="copy" size={14} /> Copy message to team</button>}
+    </div>
 
-    {triage && <>
-      {triage.actions.length > 0 && <><h4>Next steps</h4>
-        <ul className="checklist">{triage.actions.map((a, i) => <li key={i}><label><input type="checkbox" /> <span>{a.step}</span> <em>{a.owner}</em></label></li>)}</ul></>}
-      {triage.notify.length > 0 && <><h4>Tell</h4>
-        <ul className="notify">{triage.notify.map((n, i) => <li key={i}><b>{n.who}</b> {n.why}</li>)}</ul></>}
-      <h4>Message to send</h4>
-      <CodeBlock code={triage.message} label="Copy message" />
-      <details className="steps"><summary>How the agent investigated ({triage.steps.length} steps)</summary>
-        <ol>{triage.steps.map((s, i) => <li key={i}><code>{s.tool}</code>{Object.values(s.input).length > 0 && ` ${Object.values(s.input).join(', ')}`}</li>)}</ol>
-      </details>
-    </>}
+    <div className="folds">
+      {triage && triage.root_causes.length > 0 && <Fold title="What went wrong" count={triage.root_causes.length}>
+        <p className="muted">{triage.verdict_reason}</p>
+        <ol className="causes">{triage.root_causes.map((c, i) => <li key={i}><span className={`conf ${c.confidence}`}>{c.confidence}</span>
+          <div><b>{c.hypothesis}</b><small>{c.evidence}</small></div></li>)}</ol>
+      </Fold>}
+      {fix && fix.operations.length > 0 && <Fold title="What the AI fixed" count={fix.operations.length}>
+        <p className="muted">{fix.summary}</p>
+        <ol className="causes">{fix.operations.map((op, i) => <li key={i}><span className="conf done">fixed</span>
+          <div><b>{op.effect}</b><small>{op.reason}</small></div></li>)}</ol>
+        {fix.warnings.map((w, i) => <p key={i} className="note"><Icon name="info" size={13} /> {w}</p>)}
+      </Fold>}
+      {fix && fix.not_fixed.length > 0 && <Fold title="Left for a person" count={fix.not_fixed.length}>
+        <ul className="notify">{fix.not_fixed.map((n, i) => <li key={i}><b>{n.issue}</b> {n.why}</li>)}</ul>
+      </Fold>}
+      {triage && triage.actions.length > 0 && <Fold title="Next steps" count={triage.actions.length}>
+        <ul className="checklist">{triage.actions.map((a, i) => <li key={i}><label><input type="checkbox" /> <span>{a.step}</span> <em>{a.owner}</em></label></li>)}</ul>
+      </Fold>}
+      {triage && triage.notify.length > 0 && <Fold title="Who to tell" count={triage.notify.length}>
+        <ul className="notify">{triage.notify.map((n, i) => <li key={i}><b>{n.who}</b> {n.why}</li>)}</ul>
+      </Fold>}
+      {triage && <Fold title="Message to send"><CodeBlock code={triage.message} label="Copy message" /></Fold>}
+      {triage && triage.steps.length > 0 && <Fold title="How the agent investigated" count={triage.steps.length}>
+        <ol className="agent-steps">{triage.steps.map((s, i) => <li key={i}>{describeStep(s)}</li>)}</ol>
+      </Fold>}
+    </div>
     {(!triage || !fix) && <div className="actions"><small className="muted">{triage ? 'No repaired copy yet.' : 'No diagnosis yet.'}</small>{button}</div>}
   </section>
+}
+
+/** A collapsed section of the AI panel: title and count, opened on click. */
+function Fold({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
+  return <details className="fold">
+    <summary><span>{title}</span>{count !== undefined && <span className="count">{count}</span>}</summary>
+    <div className="fold-body">{children}</div>
+  </details>
+}
+
+/** One tool call by the triage agent, in words. */
+function describeStep(step: Triage['steps'][number]) {
+  const input = step.input || {}
+  const column = typeof input.column === 'string' ? input.column : null
+  switch (step.tool) {
+    case 'list_issues': return 'Listed the issues the checks found'
+    case 'get_column_stats': return column ? <>Compared column <code>{column}</code> with the baseline</> : 'Compared a column with the baseline'
+    case 'get_run_history': return 'Looked at earlier checks of this data'
+    case 'get_consumers': return 'Looked up who uses this data'
+    default: return <><code>{step.tool}</code>{Object.values(input).length > 0 && ` ${Object.values(input).map(String).join(', ')}`}</>
+  }
 }
 
 /** The drift model's column drivers, parsed from "amount (90%), quantity (9%)". */

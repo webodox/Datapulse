@@ -19,15 +19,16 @@ A data-quality check has just flagged a new batch. Investigate with the tools be
 list_issues, then look at the columns involved, the run history, and who depends on the data.
 
 Then triage it:
-- headline: one sentence a manager can read.
+- headline: one short sentence (under 25 words) a manager can read.
+- verdict_reason: one sentence.
 - verdict: "block" if shipping this batch would likely break a consumer or corrupt results, "investigate" if it \
 needs a human look first, "safe_to_ship" if the findings are benign.
-- root_causes: ranked hypotheses tied to evidence you looked up. Say how sure you are; never present a \
-hypothesis as fact.
-- actions: concrete next steps, each with an owner taken from the consumer list or a role such as \
+- root_causes: at most 3 ranked hypotheses tied to evidence you looked up, each one short sentence with one \
+short sentence of evidence. Say how sure you are; never present a hypothesis as fact.
+- actions: at most 4 concrete next steps of one sentence each, each with an owner taken from the consumer list or a role such as \
 "data producer"; never invent people.
-- notify: only consumers or owners that appear in the data, and why each should hear about it.
-- message: a short Slack/email message the engineer can send as-is.
+- notify: only consumers or owners that appear in the data, and in one sentence why each should hear about it.
+- message: a Slack/email message under 70 words the engineer can send as-is.
 Be specific and brief. You only ever see aggregates, never rows."""
 
 SCHEMA = {

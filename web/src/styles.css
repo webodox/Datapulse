@@ -566,3 +566,18 @@ small.hl { color: var(--warn-text); font-weight: 600; display: inline-flex; gap:
 .deliveries span { color: var(--ink-2) }
 @media (max-width: 520px) { .mode-pick { grid-template-columns: 1fr } }
 .quick-check .card-head p { margin: 4px 0 0 }
+
+/* ---------- AI investigation: summary on top, sections folded ---------- */
+.fix-summary { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px }
+.fix-summary > b { font-size: 15px }
+.fix-summary .fix-score b { font-size: 18px }
+.folds { display: grid; gap: 6px; margin-top: 4px }
+.fold { border: 1px solid var(--border); border-radius: 10px; background: var(--surface) }
+.fold > summary { color: var(--ink); list-style: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; font-weight: 600; font-size: 14.5px }
+.fold > summary::-webkit-details-marker { display: none }
+.fold > summary::after { content: '▾'; margin-left: auto; color: var(--muted); font-size: 13px }
+.fold[open] > summary::after { content: '▴' }
+.fold > summary .count { background: var(--surface-3); color: var(--ink-2); border-radius: 99px; padding: 0 8px; font-size: 12.5px }
+.fold-body { padding: 0 14px 12px; display: grid; gap: 10px }
+.fold-body > p { margin: 0 }
+.agent-steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 14px }
