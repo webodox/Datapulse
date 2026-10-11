@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, API_ORIGIN, plural, type Created, type Project, type User } from './api'
 import { AccountPage, SignIn } from './auth'
-import { Icon } from './icons'
+import { Brand, Icon } from './icons'
 import { ProjectView, TABS, type Tab } from './project'
 import { Modal, Spinner, ToastProvider, useAction, useNotify, useTheme } from './ui'
 
@@ -78,7 +78,7 @@ function Shell({ user, auth0, signOut }: { user: User; auth0: boolean; signOut: 
 
   return <div className="shell">
     <aside className="sidebar">
-      <div className="brand"><span className="logo"><Icon name="activity" size={18} /></span>DataPulse</div>
+      <Brand />
       <button className="button primary full" onClick={() => setCreating(true)} disabled={offline}><Icon name="plus" size={15} /> New project</button>
       <nav className="project-list" aria-label="Projects">
         {projects?.map(p => <a key={p.id} href={`#/p/${p.id}/sources`} className={`project-link ${p.id === route.id ? 'active' : ''}`}

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, type User } from './api'
-import { Icon } from './icons'
+import { Brand, Icon } from './icons'
 import { Spinner, useAction, useNotify } from './ui'
 
 /** Sign-in failures from the Auth0 round trip come back as ?signin_error=…; read once, then cleared from the address. */
@@ -16,7 +16,7 @@ export function SignIn({ setupNeeded, auth0, onSignedIn }: { setupNeeded: boolea
   const [error] = useState(takeSignInError)
   if (auth0) return <div className="auth-page">
     <div className="auth-card">
-      <div className="brand"><span className="logo"><Icon name="activity" size={18} /></span>DataPulse</div>
+      <Brand />
       <h1>{setupNeeded ? 'Welcome to DataPulse' : 'Sign in'}</h1>
       <p className="muted">{setupNeeded ? "You're the first person here, so you'll be the admin. You'll add your teammates next."
         : 'Use Google or your email. Your data stays behind this sign-in.'}</p>
@@ -40,7 +40,7 @@ function PasswordSignIn({ setupNeeded, onSignedIn }: { setupNeeded: boolean; onS
   }
   return <div className="auth-page">
     <form className="auth-card" onSubmit={submit}>
-      <div className="brand"><span className="logo"><Icon name="activity" size={18} /></span>DataPulse</div>
+      <Brand />
       <h1>{setupNeeded ? 'Create the admin account' : 'Sign in'}</h1>
       {setupNeeded && <p className="muted">You're the first person here. You'll add your teammates next.</p>}
       {setupNeeded && <label>Name<input value={form.name} onChange={set('name')} autoFocus required maxLength={80} /></label>}

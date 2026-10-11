@@ -27,6 +27,19 @@ const PATHS: Record<string, string> = {
 
 export type IconName = keyof typeof PATHS
 
+/** The DataPulse mark: three sources merge into one line, which ends in a pulse. */
+export function Logo({ size = 20 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M2.5 5.5C6.5 5.5 7 12 10.5 12M2.5 18.5C6.5 18.5 7 12 10.5 12" opacity={0.6} />
+    <path d="M2.5 12h8l2-4.5 3 9 2-4.5h4" />
+  </svg>
+}
+
+export function Brand() {
+  return <div className="brand"><span className="logo"><Logo /></span><span className="wordmark">Data<em>Pulse</em></span></div>
+}
+
 export function Icon({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {
   return <svg className={`icon ${className || ''}`} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
     strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={PATHS[name]} /></svg>
