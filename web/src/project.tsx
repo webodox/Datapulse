@@ -84,7 +84,7 @@ function ChecksTab({ detail, runId, select, changed, ai }: { detail: ProjectDeta
   </Empty>
   return <div className="checks-layout">
     <RunHistory runs={detail.runs} selected={viewed.id} select={select} />
-    <RunReport key={viewed.id} run={viewed} projectId={detail.id} failOn={detail.fail_on} ai={ai} changed={changed} />
+    <RunReport key={viewed.id} run={viewed} projectId={detail.id} failOn={detail.fail_on} ai={ai} changed={changed} select={select} />
   </div>
 }
 
@@ -107,7 +107,8 @@ function RunHistory({ runs, selected, select }: { runs: Run[]; selected: string;
   </aside>
 }
 
-function RunReport({ run, projectId, failOn, ai, changed }: { run: Run; projectId: string; failOn: string; ai: boolean; changed: () => Promise<unknown> }) {
+function RunReport({ run, projectId, failOn, ai, changed, select }:
+  { run: Run; projectId: string; failOn: string; ai: boolean; changed: () => Promise<unknown>; select: (id?: string) => void }) {
   const notify = useNotify()
   const { report } = run
   const tone = runTone(run)
@@ -131,6 +132,7 @@ function RunReport({ run, projectId, failOn, ai, changed }: { run: Run; projectI
     </div>
 
     {report.issues.length > 0 && <OverviewCard run={run} projectId={projectId} blocks={blocks} ai={ai} changed={changed} narrow={narrow} />}
+    {report.issues.length > 0 && <FixCard run={run} projectId={projectId} ai={ai} changed={changed} select={select} />}
     {report.issues.length > 0 && <ReviewBar run={run} projectId={projectId} changed={changed} />}
     {report.source && <SourceNote projectId={projectId} run={run} />}
     {report.unified && <UnifiedNote projectId={projectId} run={run} changed={changed} />}
@@ -157,6 +159,63 @@ function tally(issues: Issue[], keys: (issue: Issue) => string[]) {
 }
 
 const overviewRequests = new Map<string, Promise<Overview>>() // one request per run, even when effects run twice
+
+/** The repair agent: fixes a copy of the data with safe operations, then every check runs on it again. */
+function FixCard({ run, projectId, ai, changed, select }:
+  { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; select: (id?: string) => void }) {
+  const notify = useNotify()
+  const [busy, act] = useAction()
+  const fix = run.report.fix
+  const repair = () => act('fix', async () => { await api.fix(projectId, run.id); await changed() })
+  const recheck = () => act('recheck', async () => {
+    const report = await api.checkFixed(projectId, run.id)
+    await changed(); select(report.run_id)
+    notify.ok(`Fixed file checked: ${plural(report.issues.length, 'issue')} left`)
+  })
+
+  if (!fix) return <div className="fix-cta">
+    <span className="fix-icon"><Icon name="wrench" size={18} /></span>
+    <div>
+      <b>{busy ? 'The AI agent is repairing a copy…' : 'Fix it with AI'}</b>
+      <small>{busy ? 'It fixes one problem at a time and re-checks after each. About a minute.'
+        : ai ? 'An AI agent repairs a copy: converts units, turns text back into numbers, removes duplicates and fixes spellings, then re-runs every check. Your original is never changed.'
+        : 'AI is off. Set ANTHROPIC_API_KEY on the server to turn it on.'}</small>
+    </div>
+    <button className="button primary" disabled={!ai || !!busy} onClick={repair}>
+      {busy ? <Spinner text="Fixing…" /> : <><Icon name="sparkle" size={14} /> Fix with AI</>}</button>
+  </div>
+
+  return <section className="fix">
+    <header>
+      <span className="pill verdict clean"><Icon name="wrench" size={12} /> Repaired copy</span>
+      <small className="muted"><Icon name="sparkle" size={12} /> AI repair{fix.by && ` · requested by ${fix.by}`}</small>
+    </header>
+    <div className="fix-summary">
+      <b>AI fixed {plural(fix.operations.length, 'problem')}</b>
+      <div className="fix-score">
+        <div><small>Issues</small><b>{fix.before.total} <span>→</span> {fix.after.total}</b></div>
+        <div><small>Critical</small><b>{fix.before.critical} <span>→</span> {fix.after.critical}</b></div>
+        <div><small>Rows</small><b>{fix.rows.before.toLocaleString()} <span>→</span> {fix.rows.after.toLocaleString()}</b></div>
+      </div>
+    </div>
+    {fix.summary && <p className="muted">{fix.summary}</p>}
+    <div className="actions">
+      <a className="button primary" href={api.fixedUrl(projectId, run.id)} download={fix.file_name}><Icon name="download" size={14} /> Download fixed file</a>
+      <button className="button outline" disabled={!!busy} onClick={recheck}>{busy === 'recheck' ? <Spinner text="Checking…" /> : 'Check the fixed file'}</button>
+    </div>
+    {(fix.operations.length > 0 || fix.not_fixed.length > 0) && <details className="fold">
+      <summary><span>What the AI changed</span></summary>
+      <div className="fold-body">
+        {fix.operations.length > 0 && <ol className="causes">{fix.operations.map((op, i) => <li key={i}><span className="conf done">fixed</span>
+          <div><b>{op.effect}</b><small>{op.reason}</small></div></li>)}</ol>}
+        {fix.warnings.map((w, i) => <p key={i} className="note"><Icon name="info" size={13} /> {w}</p>)}
+        {fix.not_fixed.length > 0 && <><h4>Left for a person</h4>
+          <ul className="causes">{fix.not_fixed.map((n, i) => <li key={i}><span className="conf">open</span>
+            <div><b>{n.issue}</b><small>{n.why}</small></div></li>)}</ul></>}
+      </div>
+    </details>}
+  </section>
+}
 
 /** What's going on at a glance: an AI summary (written once per run) over counts by rule. */
 function OverviewCard({ run, projectId, blocks, ai, changed, narrow }: { run: Run; projectId: string; blocks: (issue: Issue) => boolean

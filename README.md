@@ -45,7 +45,7 @@ What checks the data:
 | ML drift model (`ml_drift` check) | Spotting subtle or multi-column drift and pointing at the columns responsible | Dashboard (automatic), `check --reference good.csv` | nothing; runs locally |
 | AI source mapping | Converting each new data source to your standard format: renamed columns, other units, numbers stored as text, different spellings. Approved once, then replayed on every load without AI | Dashboard **Sources** tab | `ANTHROPIC_API_KEY` (name matching works without it) |
 | AI overview | On a failed check: a short summary of what went wrong and the first things to look at, written once per check from statistics only | Dashboard **Results** tab (automatic) | `ANTHROPIC_API_KEY` (a plain count-based summary without it) |
-| Triage and repair agents | Two agents in parallel. The triage agent handles the first hour of an incident (root cause, block-or-ship call, fix steps, who to tell, the message); the repair agent fixes a copy (rescales units, converts text back to numbers, removes duplicates, standardizes spellings) and re-runs every check to prove it worked | `check --triage`, `datapulse fix data.csv -o fixed.csv`, or the REST API (`/runs/{id}/investigate`) | `ANTHROPIC_API_KEY` |
+| Triage and repair agents | Two agents in parallel. The triage agent handles the first hour of an incident (root cause, block-or-ship call, fix steps, who to tell, the message); the repair agent fixes a copy (rescales units, converts text back to numbers, removes duplicates, standardizes spellings) and re-runs every check to prove it worked | Repair: **Fix with AI** on a failed check in the dashboard **Results** tab (download the fixed file, or check it). Both: `check --triage`, `datapulse fix data.csv -o fixed.csv`, or the REST API (`/runs/{id}/investigate`) | `ANTHROPIC_API_KEY` |
 | Before/after charts | Seeing a shift instantly: each column's value ranges and empty rates, baseline vs. new file | Dashboard, on each issue | nothing |
 | Rules assistant | Writing and debugging YAML; drafts are validated and self-corrected before you see them | Dashboard **Settings** tab, `datapulse draft-rules "..."` | `ANTHROPIC_API_KEY` |
 | Issue explanations | A hedged hypothesis per issue | `check --ai`, dashboard toggle | `ANTHROPIC_API_KEY` |
@@ -186,7 +186,7 @@ use **Quick check a file**; the check starts as soon as the file lands (CSV, JSO
 | Tab | What's there |
 |---|---|
 | **Sources** | Connect sources, pick the standard, map, unify, and send the result to your database; quick-check a file |
-| **Results** | Every check (pulls, unifies, quick checks) with its report: an AI overview, the issues split into blocking and not blocking, before/after charts, and an **Open / Resolved** status |
+| **Results** | Every check (pulls, unifies, quick checks) with its report: an AI overview, **Fix with AI** (the repair agent fixes a copy and you can re-check it), the issues split into blocking and not blocking, before/after charts, and an **Open / Resolved** status |
 | **Settings** | The standard format (column profile; replace it with a file after an intentional change) and the rules: the project's `datapulse.yml`, the plain-English rules assistant and suggestions to copy from |
 
 **Sending data from any language.** Creating a project through the API returns an API key once (only its hash is stored); the dashboard doesn't show it.
