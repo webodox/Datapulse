@@ -10,7 +10,7 @@ import shutil
 import sqlite3
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import pandas as pd
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -23,6 +23,9 @@ from datapulse.unifier.documents import is_document
 from datapulse.compare import compare_mapping
 from datapulse.samples import write_samples
 from datapulse.sources import catalog, clean_settings, fetch_source, public_settings, try_connection, type_of
+from datapulse import notify as notify_module
+from datapulse.notify import parse_and_validate_emails, validate_slack_webhook
+from datapulse.scheduler import auto_run_source, compute_next_run
 from datapulse.unify import SOURCE_COLUMN, apply_recipe, combine, propose_mapping, validate_recipe
 
 from .core import MAX_UPLOAD_BYTES, ROOT, ai_call, dataset_rows, loads, project_config, project_row, run_check, save_baseline
@@ -70,6 +73,26 @@ class Compare(BaseModel):
     operations: Optional[list] = Field(default=None, max_length=100)  # None: the proposal, else the saved recipe
 
 
+class ScheduleForm(BaseModel):
+    enabled: bool = True
+    interval: Literal["hourly", "every_2h", "every_6h", "every_12h", "daily", "daily_overnight", "weekly"] = "daily"
+    slack_webhook_url: Optional[str] = None
+    emails: Optional[List[str]] = None
+    policy: Optional[Literal["on_break", "always_on_failure", "always"]] = "on_break"
+
+
+class ProjectNotifyForm(BaseModel):
+    slack_webhook_url: Optional[str] = None
+    emails: Optional[List[str]] = None
+    policy: Optional[Literal["on_break", "always_on_failure", "always"]] = "on_break"
+
+
+class TestNotifyForm(BaseModel):
+    channel: Literal["slack", "email", "all"] = "all"
+    slack_webhook_url: Optional[str] = None
+    emails: Optional[List[str]] = None
+
+
 def _source(project_id: str, source_id: str) -> sqlite3.Row:
     with connect() as db:
         row = db.execute("SELECT * FROM sources WHERE id = ? AND project_id = ?", (source_id, project_id)).fetchone()
@@ -81,14 +104,21 @@ def _source(project_id: str, source_id: str) -> sqlite3.Row:
 def _public(row: sqlite3.Row) -> Dict[str, Any]:
     recipe = loads(row["recipe_json"])
     settings = json.loads(row["settings_json"])
+    schedule = loads(row["schedule_json"]) if "schedule_json" in row.keys() and row["schedule_json"] else None
+    notify = loads(row["notify_json"]) if "notify_json" in row.keys() and row["notify_json"] else None
     return {
         "id": row["id"], "name": row["name"], "kind": row["kind"], "type": type_of(row["kind"], settings),
         "settings": public_settings(row["kind"], settings),
         "status": "standard" if row["is_standard"] else "mapped" if recipe is not None else "needs_mapping",
         "recipe": recipe or [], "proposal": loads(row["proposal_json"]),
+        "schedule": schedule or {"enabled": False, "interval": "daily"},
+        "notify": notify or {"slack_webhook_url": "", "emails": [], "policy": "on_break"},
+        "last_scheduled_status": row["last_scheduled_status"] if "last_scheduled_status" in row.keys() else None,
+        "last_error": row["last_error"] if "last_error" in row.keys() else None,
         "last_pulled_at": row["last_pulled_at"], "last_run_id": row["last_run_id"],
         "created_by": row["created_by"], "created_at": row["created_at"],
     }
+
 
 
 def _fail(exc: DataPulseError) -> HTTPException:
@@ -372,3 +402,146 @@ def unify(project_id: str, request: Request) -> dict:
         with connect() as db:
             db.execute("UPDATE runs SET report_json = ? WHERE id = ?", (json.dumps(doc), doc["run_id"]))
     return doc
+
+
+@router.get("/projects/{project_id}/sources/{source_id}/schedule")
+def get_source_schedule(project_id: str, source_id: str) -> dict:
+    row = _source(project_id, source_id)
+    schedule = loads(row["schedule_json"]) if "schedule_json" in row.keys() and row["schedule_json"] else None
+    notify = loads(row["notify_json"]) if "notify_json" in row.keys() and row["notify_json"] else None
+    return {
+        "schedule": schedule or {"enabled": False, "interval": "daily"},
+        "notify": notify or {"slack_webhook_url": "", "emails": [], "policy": "on_break"},
+        "last_scheduled_status": row["last_scheduled_status"] if "last_scheduled_status" in row.keys() else None,
+        "last_error": row["last_error"] if "last_error" in row.keys() else None,
+    }
+
+
+@router.put("/projects/{project_id}/sources/{source_id}/schedule")
+def update_source_schedule(project_id: str, source_id: str, payload: ScheduleForm) -> dict:
+    row = _source(project_id, source_id)
+    slack_url = (payload.slack_webhook_url or "").strip()
+    if slack_url:
+        try:
+            slack_url = validate_slack_webhook(slack_url)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    valid_emails = []
+    if payload.emails is not None:
+        try:
+            valid_emails = parse_and_validate_emails(payload.emails)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    schedule = loads(row["schedule_json"]) if "schedule_json" in row.keys() and row["schedule_json"] else {}
+    next_run = compute_next_run(payload.interval) if payload.enabled else None
+    schedule.update({
+        "enabled": payload.enabled,
+        "interval": payload.interval,
+        "next_run_at": next_run,
+    })
+
+    notify = {
+        "slack_webhook_url": slack_url,
+        "emails": valid_emails,
+        "policy": payload.policy or "on_break",
+    }
+
+    with connect() as db:
+        db.execute(
+            "UPDATE sources SET schedule_json = ?, notify_json = ? WHERE id = ?",
+            (json.dumps(schedule), json.dumps(notify), source_id),
+        )
+
+    return _public(_source(project_id, source_id))
+
+
+@router.post("/projects/{project_id}/sources/{source_id}/schedule/run")
+def run_source_schedule_now(project_id: str, source_id: str, request: Request) -> dict:
+    """Manually trigger the auto-run pipeline for a source immediately."""
+    _source(project_id, source_id)
+    base_url = str(request.base_url) if request else None
+    try:
+        return auto_run_source(project_id, source_id, trigger="manual", dashboard_base_url=base_url)
+    except Exception as exc:
+        raise HTTPException(500, f"Auto-run failed: {str(exc)}") from exc
+
+
+@router.get("/projects/{project_id}/notifications")
+def get_project_notifications(project_id: str) -> dict:
+    project = project_row(project_id)
+    notify = loads(project["notify_json"]) if "notify_json" in project.keys() and project["notify_json"] else {}
+    return {
+        "slack_webhook_url": notify.get("slack_webhook_url", ""),
+        "emails": notify.get("emails", []),
+        "policy": notify.get("policy", "on_break"),
+    }
+
+
+@router.put("/projects/{project_id}/notifications")
+def save_project_notifications(project_id: str, payload: ProjectNotifyForm) -> dict:
+    project_row(project_id)
+    slack_url = (payload.slack_webhook_url or "").strip()
+    if slack_url:
+        try:
+            slack_url = validate_slack_webhook(slack_url)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    valid_emails = []
+    if payload.emails is not None:
+        try:
+            valid_emails = parse_and_validate_emails(payload.emails)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    notify = {
+        "slack_webhook_url": slack_url,
+        "emails": valid_emails,
+        "policy": payload.policy or "on_break",
+    }
+
+    with connect() as db:
+        db.execute("UPDATE projects SET notify_json = ? WHERE id = ?", (json.dumps(notify), project_id))
+
+    return notify
+
+
+@router.post("/projects/{project_id}/notifications/test")
+def test_project_notifications(project_id: str, payload: TestNotifyForm) -> dict:
+    project = project_row(project_id)
+    saved = loads(project["notify_json"]) if "notify_json" in project.keys() and project["notify_json"] else {}
+
+    slack_url = (payload.slack_webhook_url or "").strip() or saved.get("slack_webhook_url", "").strip()
+    emails = payload.emails if payload.emails is not None else saved.get("emails", [])
+
+    results = {}
+    if payload.channel in ("slack", "all"):
+        if not slack_url:
+            results["slack"] = {"ok": False, "message": "No Slack webhook URL provided or saved."}
+        else:
+            results["slack"] = notify_module.send_slack_alert(
+                webhook_url=slack_url,
+                project_name=project["name"],
+                source_name="Test Source",
+                status="passed",
+                summary="Test alert from DataPulse. Your Slack integration is connected successfully!",
+            )
+
+    if payload.channel in ("email", "all"):
+        valid_emails = parse_and_validate_emails(emails) if emails else []
+        if not valid_emails:
+            results["email"] = {"ok": False, "message": "No email recipients provided or saved."}
+        else:
+            subject = f"[DataPulse Test] Notifications configured for {project['name']}"
+            text = "Your DataPulse email notifications are connected and working properly!"
+            html = "<p>Your DataPulse email notifications are connected and working properly! 🎉</p>"
+            results["email"] = notify_module.send_email_alert(
+                emails=valid_emails,
+                subject=subject,
+                text_body=text,
+                html_body=html,
+            )
+
+    return results

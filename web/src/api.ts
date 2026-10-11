@@ -35,9 +35,26 @@ export type SourceField = { name: string; label: string; placeholder: string; se
 export type SourceKind = { kind: string; label: string; group: string; description: string; fields: SourceField[]; available: boolean; missing_packages: string[]; hidden: boolean; has_sample: boolean }
 export type Step = { operation: string; args: Record<string, unknown>; reason: string; effect?: string }
 export type Mapping = Omit<Fix, 'file_name' | 'operations'> & { operations: Step[]; automatic_steps: number; source_columns: string[]; model: string | null; at?: string }
+export type ScheduleConfig = {
+  enabled: boolean
+  interval: 'hourly' | 'every_2h' | 'every_6h' | 'every_12h' | 'daily' | 'daily_overnight' | 'weekly'
+  next_run_at?: string | null
+  last_run_at?: string | null
+  last_status?: 'passed' | 'failed' | 'error' | null
+  last_error?: string | null
+}
+export type NotifyConfig = {
+  slack_webhook_url?: string
+  emails?: string[]
+  policy?: 'on_break' | 'always_on_failure' | 'always'
+}
 export type Source = {
   id: string; name: string; kind: string; type: string; settings: Record<string, string> & { saved_secrets?: string[] }
   status: 'standard' | 'mapped' | 'needs_mapping'; recipe: Step[]; proposal: Mapping | null
+  schedule?: ScheduleConfig
+  notify?: NotifyConfig
+  last_scheduled_status?: 'passed' | 'failed' | 'error' | null
+  last_error?: string | null
   last_pulled_at: string | null; last_run_id: string | null; created_by: string | null; created_at: string
 }
 export type Delivery = { id: string; name: string; type: string; table: string; ok: boolean; held: boolean; message: string }
@@ -134,6 +151,18 @@ export const api = {
   saveRecipe: (id: string, sid: string, operations: Step[]) => request<Source>('PUT', `/api/projects/${id}/sources/${sid}/recipe`, { operations }),
   pullSource: (id: string, sid: string, role: 'baseline' | 'candidate') =>
     request<Report & { run_id?: string }>('POST', `/api/projects/${id}/sources/${sid}/pull`, { role }),
+  getSourceSchedule: (id: string, sid: string) =>
+    request<{ schedule: ScheduleConfig; notify: NotifyConfig; last_scheduled_status: string | null; last_error: string | null }>('GET', `/api/projects/${id}/sources/${sid}/schedule`),
+  saveSourceSchedule: (id: string, sid: string, data: { enabled: boolean; interval: string; slack_webhook_url?: string; emails?: string[]; policy?: string }) =>
+    request<Source>('PUT', `/api/projects/${id}/sources/${sid}/schedule`, data),
+  runSourceScheduleNow: (id: string, sid: string) =>
+    request<{ ok: boolean; status: string; run_id?: string; error?: string; alert?: Record<string, { ok: boolean; message: string }> }>('POST', `/api/projects/${id}/sources/${sid}/schedule/run`),
+  getProjectNotifications: (id: string) =>
+    request<NotifyConfig>('GET', `/api/projects/${id}/notifications`),
+  saveProjectNotifications: (id: string, data: NotifyConfig) =>
+    request<NotifyConfig>('PUT', `/api/projects/${id}/notifications`, data),
+  testNotifications: (id: string, data: { channel: 'slack' | 'email' | 'all'; slack_webhook_url?: string; emails?: string[] }) =>
+    request<{ slack?: { ok: boolean; message: string }; email?: { ok: boolean; message: string } }>('POST', `/api/projects/${id}/notifications/test`, data),
   destinations: (id: string) => request<Destination[]>('GET', `/api/projects/${id}/destinations`),
   testDestination: (id: string, form: Omit<DestinationForm, 'name'>, destination_id?: string) =>
     request<{ ok: boolean; message: string }>('POST', `/api/projects/${id}/destinations/test`, { ...form, destination_id }),
