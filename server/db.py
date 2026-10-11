@@ -126,13 +126,7 @@ ADDED_COLUMNS = [
     ("runs", "review_status", "TEXT NOT NULL DEFAULT 'open'"),  # open | acknowledged | resolved
     ("runs", "review_by", "TEXT"),
     ("runs", "review_at", "TEXT"),
-    ("sources", "schedule_json", "TEXT"),
-    ("sources", "notify_json", "TEXT"),
-    ("sources", "last_scheduled_status", "TEXT"),
-    ("sources", "last_error", "TEXT"),
-    ("projects", "notify_json", "TEXT"),
 ]
-
 
 
 def init_db() -> None:

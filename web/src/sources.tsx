@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { api, fmtDate, plural, runTone, timeAgo, type Destination, type DestinationForm, type Mapping, type NotifyConfig, type ProjectDetail, type Run, type ScheduleConfig, type Source, type SourceKind, type Step } from './api'
+import { api, plural, runTone, timeAgo, type Destination, type DestinationForm, type Mapping, type ProjectDetail, type Run, type Source, type SourceKind, type Step } from './api'
 import { FlowDiagram, HealthCards, lastCheckOf, MappingCompare } from './flow'
 import { Icon, type IconName } from './icons'
 import { Empty, Modal, Spinner, useAction, useNotify } from './ui'
@@ -8,16 +8,6 @@ const STATUS: Record<Source['status'], { label: string; tone: string }> = {
   standard: { label: 'Standard', tone: 'clean' },
   mapped: { label: 'Mapped', tone: 'clean' },
   needs_mapping: { label: 'Needs mapping', tone: 'issues' },
-}
-
-const SCHEDULE_LABELS: Record<string, string> = {
-  daily_overnight: 'Overnight (02:00 UTC)',
-  hourly: 'Hourly',
-  every_2h: 'Every 2h',
-  every_6h: 'Every 6h',
-  every_12h: 'Every 12h',
-  daily: 'Daily',
-  weekly: 'Weekly',
 }
 
 let catalogCache: Promise<SourceKind[]> | null = null
@@ -55,8 +45,6 @@ export function SourcesTab({ detail, changed, ai, openRun }:
   const kinds = useCatalog()
   const [list, setList] = useState<Source[] | null>(null)
   const [editing, setEditing] = useState<Source | 'new' | null>(null)
-  const [scheduling, setScheduling] = useState<Source | null>(null)
-  const [projectAlerts, setProjectAlerts] = useState(false)
   const [busy, act] = useAction()
   const reload = useCallback(() => api.sources(detail.id).then(setList), [detail.id])
   useEffect(() => { reload().catch(notify.fail) }, [reload, notify])
@@ -105,23 +93,18 @@ export function SourcesTab({ detail, changed, ai, openRun }:
       <span>Any database, a file, a link, a REST API, Google Drive or a web page. Use test data to try one without your own credentials.</span>
     </Empty> : <div className="source-list">
       {list.map(s => <SourceCard key={s.id} source={s} kinds={kinds} detail={detail} ai={ai}
-        refresh={refresh} edit={() => setEditing(s)} schedule={() => setScheduling(s)} openRun={openRun} />)}
+        refresh={refresh} edit={() => setEditing(s)} openRun={openRun} />)}
     </div>}
 
     {detail.has_baseline && <Destinations projectId={detail.id} />}
-    <ProjectAlertsCard projectId={detail.id} onConfigure={() => setProjectAlerts(true)} />
 
     {editing && <SourceDialog projectId={detail.id} kinds={kinds} source={editing === 'new' ? null : editing}
       close={() => setEditing(null)} saved={() => { setEditing(null); reload() }} />}
-    {scheduling && <SourceScheduleDialog projectId={detail.id} source={scheduling}
-      close={() => setScheduling(null)} saved={() => { setScheduling(null); refresh() }} openRun={openRun} />}
-    {projectAlerts && <ProjectAlertsDialog projectId={detail.id}
-      close={() => setProjectAlerts(false)} saved={() => { setProjectAlerts(false); refresh() }} />}
   </>
 }
 
-function SourceCard({ source: s, kinds, detail, ai, refresh, edit, schedule, openRun }:
-  { source: Source; kinds: SourceKind[]; detail: ProjectDetail; ai: boolean; refresh: () => Promise<unknown>; edit: () => void; schedule: () => void; openRun: (run?: string) => void }) {
+function SourceCard({ source: s, kinds, detail, ai, refresh, edit, openRun }:
+  { source: Source; kinds: SourceKind[]; detail: ProjectDetail; ai: boolean; refresh: () => Promise<unknown>; edit: () => void; openRun: (run?: string) => void }) {
   const notify = useNotify()
   const [busy, act] = useAction()
   const [comparing, setComparing] = useState(false)
@@ -135,16 +118,6 @@ function SourceCard({ source: s, kinds, detail, ai, refresh, edit, schedule, ope
     else { openRun(report.run_id); notify.ok(report.status === 'failed' ? `${s.name}: ${plural(report.issues.length, 'issue')} to review` : `${s.name} passed`) }
   })
   const map = () => act('map', async () => { await api.mapSource(detail.id, s.id); await refresh() })
-  const runScheduleNow = () => act('run_now', async () => {
-    const res = await api.runSourceScheduleNow(detail.id, s.id)
-    await refresh()
-    if (res.ok) {
-      if (res.run_id) openRun(res.run_id)
-      notify.ok(`${s.name}: ${res.status === 'failed' ? 'Checks failed' : 'All checks passed'}`)
-    } else {
-      notify.fail(new Error(res.error || 'Check failed'))
-    }
-  })
   const remove = () => {
     if (!window.confirm(`Remove the source "${s.name}"? Past checks are kept.`)) return
     act('remove', async () => { await api.removeSource(detail.id, s.id); await refresh() })
@@ -156,33 +129,10 @@ function SourceCard({ source: s, kinds, detail, ai, refresh, edit, schedule, ope
       <div>
         <h3>{s.name}</h3>
         <small className="muted">{s.type || labelOf(kinds, s.kind)}{s.last_pulled_at ? ` · pulled ${timeAgo(s.last_pulled_at)}` : ' · never pulled'}
-          {s.schedule?.enabled && ` · ⏰ ${SCHEDULE_LABELS[s.schedule.interval] || s.schedule.interval}`}
           {lastRun && <> · last check <span className={`flow-status ${runTone(lastRun)}`}>{lastRun.issue_count ? plural(lastRun.issue_count, 'issue') : 'passed'}</span></>}</small>
       </div>
-      <div className="source-badges">
-        <span className={`pill verdict ${status.tone}`}>{status.label}{s.status === 'mapped' && s.recipe.length > 0 && ` · ${plural(s.recipe.length, 'step')}`}</span>
-        {s.schedule?.enabled && (
-          <span className="pill verdict clean schedule-badge" title={`Scheduled: ${SCHEDULE_LABELS[s.schedule.interval] || s.schedule.interval}${s.schedule.next_run_at ? ` · Next: ${fmtDate(s.schedule.next_run_at)}` : ''}`}>
-            <Icon name="clock" size={11} /> {SCHEDULE_LABELS[s.schedule.interval] || s.schedule.interval}
-          </span>
-        )}
-        {s.last_scheduled_status === 'error' && (
-          <span className="pill verdict issues error-badge" title="Source broke overnight">
-            <Icon name="alert" size={11} /> Overnight break
-          </span>
-        )}
-      </div>
+      <span className={`pill verdict ${status.tone}`}>{status.label}{s.status === 'mapped' && s.recipe.length > 0 && ` · ${plural(s.recipe.length, 'step')}`}</span>
     </header>
-
-    {s.last_scheduled_status === 'error' && s.last_error && (
-      <div className="note bad overnight-break">
-        <Icon name="alert" size={14} />
-        <div>
-          <b>Source broke overnight:</b> {s.last_error}
-          {s.notify?.slack_webhook_url && <small className="muted"> · Slack alert was sent</small>}
-        </div>
-      </div>
-    )}
 
     {s.proposal && <MappingReview proposal={s.proposal} projectId={detail.id} source={s} refresh={refresh} />}
     {!s.proposal && comparing && <MappingCompare projectId={detail.id} source={s} operations={s.recipe} />}
@@ -194,14 +144,6 @@ function SourceCard({ source: s, kinds, detail, ai, refresh, edit, schedule, ope
           {busy === 'map' ? <Spinner text="Mapping…" /> : <><Icon name="sparkle" size={14} /> Map to the standard</>}</button>
         : <button className="button primary" disabled={!!busy} onClick={() => pull('candidate')}>
           {busy === 'candidate' ? <Spinner text="Pulling…" /> : 'Pull & check'}</button>}
-      <button className="button outline" onClick={schedule} title="Set automated schedule and Slack/Email alerts">
-        <Icon name="clock" size={13} /> Schedule & Alerts
-      </button>
-      {s.schedule?.enabled && (
-        <button className="button ghost" disabled={!!busy} onClick={runScheduleNow} title="Run scheduled recipe + checks now">
-          {busy === 'run_now' ? <Spinner text="Running…" /> : <><Icon name="activity" size={13} /> Run now</>}
-        </button>
-      )}
       {s.last_run_id && <button className="button ghost" onClick={() => openRun(s.last_run_id!)}>Last check</button>}
       {s.status === 'mapped' && <button className="button ghost" disabled={!!busy} onClick={map}>{busy === 'map' ? <Spinner text="Mapping…" /> : 'Re-map'}</button>}
       {!s.proposal && detail.has_baseline && s.status !== 'standard' && <button className="button ghost" onClick={() => setComparing(c => !c)}>
@@ -215,7 +157,6 @@ function SourceCard({ source: s, kinds, detail, ai, refresh, edit, schedule, ope
       <small className="muted">AI is off: only columns with matching names will be mapped.</small>}
   </article>
 }
-
 
 /* ---------- reviewing a proposed mapping ---------- */
 
@@ -464,308 +405,6 @@ function DestinationDialog({ projectId, destination, close, saved }:
       <div className="actions">
         <button type="button" className="button outline" disabled={!!busy || (!form.url && !destination)} onClick={test}>{busy === 'test' ? <Spinner text="Connecting…" /> : 'Test connection'}</button>
         <button className="button primary" disabled={!!busy}>{busy === 'save' ? <Spinner text="Saving…" /> : destination ? 'Save changes' : 'Add destination'}</button>
-      </div>
-    </form>
-  </Modal>
-}
-
-/* ---------- automated scheduling & Slack / Email alerts ---------- */
-
-function ProjectAlertsCard({ projectId, onConfigure }: { projectId: string; onConfigure: () => void }) {
-  const [notifyCfg, setNotifyCfg] = useState<NotifyConfig | null>(null)
-  useEffect(() => {
-    api.getProjectNotifications(projectId).then(setNotifyCfg).catch(() => {})
-  }, [projectId])
-
-  const hasSlack = !!notifyCfg?.slack_webhook_url
-  const hasEmail = (notifyCfg?.emails || []).length > 0
-
-  return <section className="card project-alerts-card">
-    <div className="card-head">
-      <div>
-        <h2><Icon name="bell" size={18} /> Automated Alerts (Slack & Email)</h2>
-        <p className="muted">
-          Get notified in Slack or via Email the moment a source breaks overnight or automated quality checks fail.
-        </p>
-      </div>
-      <button className="button outline" onClick={onConfigure}>
-        <Icon name="wrench" size={14} /> Configure Alerts
-      </button>
-    </div>
-    <div className="alerts-status-bar">
-      <span className={`pill verdict ${hasSlack ? 'clean' : 'muted'}`}>
-        <Icon name={hasSlack ? 'check' : 'bell'} size={12} /> {hasSlack ? 'Slack Connected' : 'Slack Not Configured'}
-      </span>
-      <span className={`pill verdict ${hasEmail ? 'clean' : 'muted'}`}>
-        <Icon name={hasEmail ? 'check' : 'bell'} size={12} /> {hasEmail ? plural(notifyCfg!.emails!.length, 'Email recipient') : 'No Email Recipients'}
-      </span>
-      <span className="pill verdict">
-        Policy: {notifyCfg?.policy === 'always_on_failure' ? 'Every failure' : notifyCfg?.policy === 'always' ? 'All runs' : 'When something breaks'}
-      </span>
-    </div>
-  </section>
-}
-
-function SourceScheduleDialog({ projectId, source, close, saved, openRun }: {
-  projectId: string; source: Source; close: () => void; saved: () => void; openRun: (runId: string) => void
-}) {
-  const notify = useNotify()
-  const [busy, act] = useAction()
-  const [enabled, setEnabled] = useState(source.schedule?.enabled ?? true)
-  const [interval, setInterval] = useState<ScheduleConfig['interval']>(source.schedule?.interval ?? 'daily_overnight')
-  const [slackUrl, setSlackUrl] = useState(source.notify?.slack_webhook_url ?? '')
-  const [emails, setEmails] = useState((source.notify?.emails ?? []).join(', '))
-  const [policy, setPolicy] = useState(source.notify?.policy ?? 'on_break')
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
-  const [runResult, setRunResult] = useState<{ status: string; error?: string } | null>(null)
-
-  const testAlert = () => act('test', async () => {
-    setTestResult(null)
-    const emailList = emails.split(',').map(e => e.trim()).filter(Boolean)
-    if (!slackUrl.trim() && !emailList.length) {
-      setTestResult({ ok: false, message: 'Please enter a Slack webhook URL or at least one email address to test.' })
-      return
-    }
-    const res = await api.testNotifications(projectId, {
-      channel: slackUrl.trim() ? (emailList.length ? 'all' : 'slack') : 'email',
-      slack_webhook_url: slackUrl.trim(),
-      emails: emailList,
-    })
-    const messages: string[] = []
-    let ok = true
-    if (res.slack) {
-      if (!res.slack.ok) ok = false
-      messages.push(`Slack: ${res.slack.message}`)
-    }
-    if (res.email) {
-      if (!res.email.ok) ok = false
-      messages.push(`Email: ${res.email.message}`)
-    }
-    setTestResult({ ok, message: messages.join(' · ') || 'Test completed' })
-  })
-
-  const runNow = () => act('run', async () => {
-    setRunResult(null)
-    const res = await api.runSourceScheduleNow(projectId, source.id)
-    if (res.ok) {
-      notify.ok(`${source.name} check finished: ${res.status === 'failed' ? 'Checks failed' : 'All clear'}`)
-      if (res.run_id) openRun(res.run_id)
-      saved()
-    } else {
-      setRunResult({ status: 'error', error: res.error })
-      notify.fail(new Error(res.error || 'Check failed'))
-    }
-  })
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    act('save', async () => {
-      const emailList = emails.split(',').map(e => e.trim()).filter(Boolean)
-      await api.saveSourceSchedule(projectId, source.id, {
-        enabled,
-        interval,
-        slack_webhook_url: slackUrl.trim(),
-        emails: emailList,
-        policy,
-      })
-      notify.ok(`Schedule & alerts for ${source.name} saved`)
-      saved()
-    })
-  }
-
-  return <Modal title={`Schedule & Alerts: ${source.name}`} onClose={close}>
-    <form className="source-form schedule-form" onSubmit={submit}>
-      <div className="schedule-toggle-row">
-        <label className="toggle-label">
-          <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
-          <span>
-            <b>Automated Periodic Pipeline</b>
-            <small className="muted">Auto-runs source pulling, mapping recipes, and data quality checks.</small>
-          </span>
-        </label>
-      </div>
-
-      {enabled && <label>Frequency
-        <select value={interval} onChange={e => setInterval(e.target.value as any)}>
-          <option value="daily_overnight">Daily overnight (02:00 UTC) — catch breaks before morning</option>
-          <option value="hourly">Every hour</option>
-          <option value="every_2h">Every 2 hours</option>
-          <option value="every_6h">Every 6 hours</option>
-          <option value="every_12h">Every 12 hours</option>
-          <option value="daily">Every 24 hours</option>
-          <option value="weekly">Weekly</option>
-        </select>
-        {source.schedule?.next_run_at && <small className="muted">Next scheduled run: {fmtDate(source.schedule.next_run_at)}</small>}
-      </label>}
-
-      <div className="alerts-box">
-        <h4><Icon name="bell" size={14} /> Alerts when something breaks</h4>
-        <p className="muted small">A source breaks overnight or checks fail? DataPulse posts alerts to your Slack and emails.</p>
-
-        <label>Slack Webhook URL
-          <input
-            type="text"
-            value={slackUrl}
-            onChange={e => { setSlackUrl(e.target.value); setTestResult(null) }}
-            placeholder="https://hooks.slack.com/services/..."
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <small className="muted">Incoming Slack webhook for channel alerts (leave blank to inherit project defaults).</small>
-        </label>
-
-        <label>Alert Emails
-          <input
-            type="text"
-            value={emails}
-            onChange={e => { setEmails(e.target.value); setTestResult(null) }}
-            placeholder="oncall@company.com, team@company.com"
-            spellCheck={false}
-          />
-          <small className="muted">Comma-separated emails to notify.</small>
-        </label>
-
-        <label>When to alert
-          <select value={policy} onChange={e => setPolicy(e.target.value as any)}>
-            <option value="on_break">When something breaks (new issues or overnight connection error)</option>
-            <option value="always_on_failure">On every failed run</option>
-            <option value="always">On every run (both passed and failed)</option>
-          </select>
-        </label>
-
-        {testResult && <p className={`test-result ${testResult.ok ? 'ok' : 'bad'}`}>
-          <Icon name={testResult.ok ? 'check' : 'alert'} size={14} /> {testResult.message}
-        </p>}
-
-        {runResult?.error && <p className="test-result bad">
-          <Icon name="alert" size={14} /> {runResult.error}
-        </p>}
-
-        <div className="inline-buttons">
-          <button type="button" className="button ghost" disabled={!!busy} onClick={testAlert}>
-            {busy === 'test' ? <Spinner text="Testing alert…" /> : <><Icon name="bell" size={13} /> Test Slack / Email</>}
-          </button>
-          <button type="button" className="button outline" disabled={!!busy} onClick={runNow}>
-            {busy === 'run' ? <Spinner text="Checking…" /> : <><Icon name="activity" size={13} /> Run Pipeline Now</>}
-          </button>
-        </div>
-      </div>
-
-      <div className="actions">
-        <button type="button" className="button ghost" onClick={close}>Cancel</button>
-        <button type="submit" className="button primary" disabled={!!busy}>
-          {busy === 'save' ? <Spinner text="Saving…" /> : 'Save Schedule & Alerts'}
-        </button>
-      </div>
-    </form>
-  </Modal>
-}
-
-function ProjectAlertsDialog({ projectId, close, saved }: { projectId: string; close: () => void; saved: () => void }) {
-  const notify = useNotify()
-  const [busy, act] = useAction()
-  const [slackUrl, setSlackUrl] = useState('')
-  const [emails, setEmails] = useState('')
-  const [policy, setPolicy] = useState('on_break')
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
-
-  useEffect(() => {
-    api.getProjectNotifications(projectId).then(cfg => {
-      setSlackUrl(cfg.slack_webhook_url || '')
-      setEmails((cfg.emails || []).join(', '))
-      setPolicy(cfg.policy || 'on_break')
-    }).catch(notify.fail)
-  }, [projectId, notify])
-
-  const testAlert = () => act('test', async () => {
-    setTestResult(null)
-    const emailList = emails.split(',').map(e => e.trim()).filter(Boolean)
-    if (!slackUrl.trim() && !emailList.length) {
-      setTestResult({ ok: false, message: 'Please enter a Slack webhook URL or email to test.' })
-      return
-    }
-    const res = await api.testNotifications(projectId, {
-      channel: slackUrl.trim() ? (emailList.length ? 'all' : 'slack') : 'email',
-      slack_webhook_url: slackUrl.trim(),
-      emails: emailList,
-    })
-    const messages: string[] = []
-    let ok = true
-    if (res.slack) {
-      if (!res.slack.ok) ok = false
-      messages.push(`Slack: ${res.slack.message}`)
-    }
-    if (res.email) {
-      if (!res.email.ok) ok = false
-      messages.push(`Email: ${res.email.message}`)
-    }
-    setTestResult({ ok, message: messages.join(' · ') || 'Test completed' })
-  })
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    act('save', async () => {
-      const emailList = emails.split(',').map(e => e.trim()).filter(Boolean)
-      await api.saveProjectNotifications(projectId, {
-        slack_webhook_url: slackUrl.trim(),
-        emails: emailList,
-        policy,
-      })
-      notify.ok('Project default alert channels saved')
-      saved()
-    })
-  }
-
-  return <Modal title="Default Alert Channels (Slack & Email)" onClose={close}>
-    <form className="source-form schedule-form" onSubmit={submit}>
-      <p className="muted">
-        Configure default Slack and Email alert channels for all data sources in this project.
-        Sources inherit these defaults automatically.
-      </p>
-
-      <label>Default Slack Webhook URL
-        <input
-          type="text"
-          value={slackUrl}
-          onChange={e => { setSlackUrl(e.target.value); setTestResult(null) }}
-          placeholder="https://hooks.slack.com/services/..."
-          spellCheck={false}
-        />
-        <small className="muted">Slack incoming webhook to receive failure alerts.</small>
-      </label>
-
-      <label>Default Alert Emails
-        <input
-          type="text"
-          value={emails}
-          onChange={e => { setEmails(e.target.value); setTestResult(null) }}
-          placeholder="alerts@company.com, oncall@company.com"
-          spellCheck={false}
-        />
-        <small className="muted">Comma-separated email addresses.</small>
-      </label>
-
-      <label>Alert Trigger Condition
-        <select value={policy} onChange={e => setPolicy(e.target.value as any)}>
-          <option value="on_break">When something new breaks (first failure, overnight error, or new issues)</option>
-          <option value="always_on_failure">On every failed run</option>
-          <option value="always">On every run (both passed and failed)</option>
-        </select>
-      </label>
-
-      {testResult && <p className={`test-result ${testResult.ok ? 'ok' : 'bad'}`}>
-        <Icon name={testResult.ok ? 'check' : 'alert'} size={14} /> {testResult.message}
-      </p>}
-
-      <div className="actions">
-        <button type="button" className="button ghost" disabled={!!busy} onClick={testAlert}>
-          {busy === 'test' ? <Spinner text="Testing alert…" /> : <><Icon name="bell" size={13} /> Test Notification</>}
-        </button>
-        <span className="spacer" />
-        <button type="button" className="button ghost" onClick={close}>Cancel</button>
-        <button type="submit" className="button primary" disabled={!!busy}>
-          {busy === 'save' ? <Spinner text="Saving…" /> : 'Save Defaults'}
-        </button>
       </div>
     </form>
   </Modal>

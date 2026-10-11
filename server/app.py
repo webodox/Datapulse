@@ -34,8 +34,6 @@ from datapulse.profile import profile_dataframe
 from datapulse.suggest import render_yaml, suggest_rules
 from datapulse.unify import SOURCE_COLUMN
 
-from datapulse.scheduler import BackgroundScheduler
-
 from .auth import current_user, needs_login, router as auth_router
 from .core import (MAX_INGEST_ROWS, MAX_UPLOAD_BYTES, ROOT, ai_call, baseline_summary, dataset_rows, handle_data,
                    loads, project_config, project_row, record_dataset, run_check, save_upload,
@@ -44,17 +42,12 @@ from .db import configure_sources, connect, init_db, now_iso, samples_dir, uploa
 from .destinations import router as destinations_router
 from .sources import add_sample_sources, remove_uploaded_files, router as sources_router
 
-scheduler = BackgroundScheduler()
-
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
     configure_sources()
-    if os.getenv("DATAPULSE_DISABLE_SCHEDULER", "").lower() not in ("1", "true", "yes"):
-        scheduler.start()
     yield
-    scheduler.stop()
 
 
 app = FastAPI(title="DataPulse API", version=__version__, lifespan=lifespan,
