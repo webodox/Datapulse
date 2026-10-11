@@ -224,7 +224,7 @@ def test_everything_but_health_signin_and_ingest_needs_a_session(client, project
     assert client.get("/api/projects").status_code == 401
     assert client.post("/api/demo/seed").status_code == 401
     assert client.get("/api/health").status_code == 200
-    assert client.get("/api/auth/status").json() == {"setup_needed": False, "user": None}
+    assert client.get("/api/auth/status").json() == {"setup_needed": False, "user": None, "auth0": False}
     rows = json.loads(make_df(60).to_json(orient="records"))
     r = client.post(f"/api/projects/{project['id']}/ingest", headers={"X-DataPulse-Key": project["api_key"]},
                     json={"dataset_name": "orders", "role": "baseline", "rows": rows})

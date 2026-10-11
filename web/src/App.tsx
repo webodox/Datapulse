@@ -35,8 +35,8 @@ export default function App() {
 
 /** Nothing but the sign-in screen until someone is signed in. */
 function Gate() {
-  const [auth, setAuth] = useState<{ setupNeeded: boolean; user: User | null } | 'offline' | null>(null)
-  const check = useCallback(() => api.authStatus().then(s => setAuth({ setupNeeded: s.setup_needed, user: s.user }),
+  const [auth, setAuth] = useState<{ setupNeeded: boolean; user: User | null; auth0: boolean } | 'offline' | null>(null)
+  const check = useCallback(() => api.authStatus().then(s => setAuth({ setupNeeded: s.setup_needed, user: s.user, auth0: s.auth0 }),
     () => setAuth('offline')), [])
   useEffect(() => {
     check()
@@ -47,12 +47,13 @@ function Gate() {
 
   if (auth === null) return <div className="loading center"><span className="spinner" /> Loading…</div>
   if (auth === 'offline') return <div className="main"><Offline retry={check} /></div>
-  if (!auth.user) return <SignIn setupNeeded={auth.setupNeeded} onSignedIn={user => setAuth({ setupNeeded: false, user })} />
-  const signOut = () => api.logout().finally(() => setAuth({ setupNeeded: false, user: null }))
-  return <Shell user={auth.user} signOut={signOut} />
+  if (!auth.user) return <SignIn setupNeeded={auth.setupNeeded} auth0={auth.auth0} onSignedIn={user => setAuth({ ...auth, setupNeeded: false, user })} />
+  const signOut = () => api.logout().then(r => { if (r.redirect) window.location.href = r.redirect }) // Auth0 signs out too
+    .finally(() => setAuth({ ...auth, setupNeeded: false, user: null }))
+  return <Shell user={auth.user} auth0={auth.auth0} signOut={signOut} />
 }
 
-function Shell({ user, signOut }: { user: User; signOut: () => void }) {
+function Shell({ user, auth0, signOut }: { user: User; auth0: boolean; signOut: () => void }) {
   const { theme, toggle } = useTheme()
   const [route, go] = useRoute()
   const [projects, setProjects] = useState<Project[] | null>(null)
@@ -102,7 +103,7 @@ function Shell({ user, signOut }: { user: User; signOut: () => void }) {
     </aside>
 
     <main className="main">
-      {route.account ? <AccountPage user={user} />
+      {route.account ? <AccountPage user={user} auth0={auth0} />
         : offline ? <Offline retry={refresh} />
         : projects === null ? <div className="loading"><span className="spinner" /> Loading…</div>
         : !projects.length ? <Welcome onCreated={opened} />

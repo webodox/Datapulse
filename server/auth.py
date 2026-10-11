@@ -1,4 +1,4 @@
-"""Dashboard accounts: email + password, cookie sessions.
+"""Dashboard accounts: email + password (or Auth0, see auth0.py), cookie sessions.
 
 The first account created on a fresh install is the admin; the admin adds teammates. Every /api route needs a
 signed-in user except health, sign-in itself, and /ingest, which uses the project's API key instead.
@@ -21,7 +21,8 @@ from .db import connect, now_iso
 
 COOKIE = "dp_session"
 SESSION_DAYS = 14
-PUBLIC_PATHS = {"/api/health", "/api/auth/status", "/api/auth/setup", "/api/auth/login"}
+PUBLIC_PATHS = {"/api/health", "/api/auth/status", "/api/auth/setup", "/api/auth/login",
+                "/api/auth/auth0/login", "/api/auth/callback"}
 INGEST_PATH = re.compile(r"^/api/projects/[\w-]+/ingest$")
 
 router = APIRouter(prefix="/api")
@@ -35,7 +36,7 @@ class Credentials(BaseModel):
 class NewUser(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     email: str = Field(min_length=3, max_length=200)
-    password: str = Field(min_length=8, max_length=200)
+    password: Optional[str] = Field(None, min_length=8, max_length=200)  # not needed when people sign in with Auth0
     role: Literal["admin", "member"] = "member"
 
 
@@ -104,13 +105,23 @@ def _start_session(response: Response, user_id: str) -> None:
                         secure=os.getenv("DATAPULSE_SECURE_COOKIES") == "1")
 
 
-def _create_user(name: str, email: str, password: str, role: str) -> Dict[str, Any]:
+def _auth0() -> bool:
+    from .auth0 import enabled  # auth0 imports this module
+    return enabled()
+
+
+def _passwords_only() -> None:
+    if _auth0():
+        raise HTTPException(409, "This DataPulse signs in with Auth0")
+
+
+def _create_user(name: str, email: str, password: Optional[str], role: str) -> Dict[str, Any]:
     user = {"id": uuid.uuid4().hex[:12], "name": name.strip(), "email": _email(email), "role": role}
     with connect() as db:
         if db.execute("SELECT 1 FROM users WHERE email = ?", (user["email"],)).fetchone():
             raise HTTPException(409, "Someone with that email already has an account")
         db.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)",
-                   (user["id"], user["email"], user["name"], hash_password(password), role, now_iso()))
+                   (user["id"], user["email"], user["name"], hash_password(password) if password else "", role, now_iso()))
     return user
 
 
@@ -127,14 +138,17 @@ def _user_count() -> int:
 
 @router.get("/auth/status")
 def auth_status(request: Request) -> dict:
-    return {"setup_needed": _user_count() == 0, "user": current_user(request)}
+    return {"setup_needed": _user_count() == 0, "user": current_user(request), "auth0": _auth0()}
 
 
 @router.post("/auth/setup")
 def setup(payload: NewUser, response: Response) -> dict:
     """Create the first (admin) account. Only works while no account exists."""
+    _passwords_only()
     if _user_count():
         raise HTTPException(409, "This DataPulse already has an admin; sign in instead")
+    if not payload.password:
+        raise HTTPException(422, "Choose a password of at least 8 characters")
     user = _create_user(payload.name, payload.email, payload.password, "admin")
     _start_session(response, user["id"])
     return user
@@ -142,6 +156,7 @@ def setup(payload: NewUser, response: Response) -> dict:
 
 @router.post("/auth/login")
 def login(payload: Credentials, response: Response) -> dict:
+    _passwords_only()
     with connect() as db:
         row = db.execute("SELECT * FROM users WHERE email = ?", (payload.email.strip().lower(),)).fetchone()
     if not verify_password(payload.password, row["password_hash"] if row else _DUMMY_HASH) or row is None:
@@ -157,11 +172,13 @@ def logout(request: Request, response: Response) -> dict:
         with connect() as db:
             db.execute("DELETE FROM sessions WHERE token_hash = ?", (_token_hash(token),))
     response.delete_cookie(COOKIE)
-    return {"signed_out": True}
+    from .auth0 import logout_url
+    return {"signed_out": True, "redirect": logout_url(request)}
 
 
 @router.put("/auth/password")
 def change_password(payload: PasswordChange, request: Request) -> dict:
+    _passwords_only()
     user_id = request.state.user["id"]
     with connect() as db:
         stored = db.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()["password_hash"]
@@ -181,6 +198,8 @@ def list_users(request: Request) -> list:
 @router.post("/users")
 def add_user(payload: NewUser, request: Request) -> dict:
     _admin(request)
+    if not payload.password and not _auth0():
+        raise HTTPException(422, "Give them a temporary password of at least 8 characters")
     return _create_user(payload.name, payload.email, payload.password, payload.role)
 
 
