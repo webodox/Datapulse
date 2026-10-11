@@ -200,6 +200,13 @@ project's API key so other services can send data. Passwords are stored as scryp
 cookies that last 14 days. If the dashboard is reachable from the internet, serve it over HTTPS (for example behind
 a reverse proxy) and set `DATAPULSE_SECURE_COOKIES=1`.
 
+**Sign in with Auth0.** Set `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET` (an Auth0 *Regular Web
+Application*) and the sign-in page becomes a single **Continue with Auth0** button: Google, email or any connection
+you turn on in Auth0. In Auth0, allow `https://<your site>/api/auth/callback` as a callback URL and
+`https://<your site>` as a logout URL. Auth0 proves who someone is; DataPulse still decides who gets in: the first
+person to sign in becomes the admin, and after that only people the admin adds by email, once Auth0 has verified that
+email. Password sign-in is turned off while Auth0 is on; remove the three variables to go back to passwords.
+
 ## Running it without Python
 
 DataPulse itself needs no Python in your project: it reads CSV/Parquet and YAML and adds nothing to your

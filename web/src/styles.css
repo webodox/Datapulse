@@ -360,6 +360,8 @@ a.button { text-decoration: none }
 .auth-card label { display: grid; gap: 5px; font-weight: 600; font-size: 14px }
 .auth-card label small { font-weight: 400 }
 .auth-card input { font-weight: 400 }
+.auth-error { display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--crit-soft); color: var(--crit-text); font-size: 14px }
+.auth-card a.button { text-decoration: none; justify-content: center }
 .small { font-size: 13px; text-align: center }
 input[type=email], input[type=password], .add-person select { border: 1px solid var(--border-strong); background: var(--surface); border-radius: 9px; padding: 9px 12px; outline: none; min-width: 0 }
 input[type=email]:focus, input[type=password]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring) }
