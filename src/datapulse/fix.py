@@ -121,9 +121,33 @@ def standardize_categories(df, baseline, column: str):
     return out, f"Standardized {changed:,} values in '{column}' to the baseline's spelling."
 
 
+def drop_rows_outside_range(df, baseline, column: str, min: Optional[float] = None, max: Optional[float] = None):
+    s = _need(df, column)
+    if min is None and max is None:
+        raise RepairError("Give a min, a max, or both.")
+    values = pd.to_numeric(s, errors="coerce")
+    bad = (values < min if min is not None else False) | (values > max if max is not None else False)
+    bad = pd.Series(bad, index=df.index).fillna(False).astype(bool)
+    limits = " and ".join(t for t in (min is not None and f"below {min:g}", max is not None and f"above {max:g}") if t)
+    return df[~bad].reset_index(drop=True), f"Removed {int(bad.sum()):,} rows where '{column}' was {limits}."
+
+
+def drop_rows_not_in(df, baseline, column: str, values: Optional[List[str]] = None):
+    """Remove rows whose value is not one of `values` (default: the baseline's known values). Empty values stay."""
+    s = _need(df, column)
+    known = values if values is not None else (baseline["columns"].get(column) or {}).get("categories")
+    if not known:
+        raise RepairError(f"There is no list of known values for '{column}'.")
+    known = {str(k) for k in known}
+    bad = s.notna() & ~s.astype("string").isin(known).fillna(False)
+    return (df[~bad].reset_index(drop=True),
+            f"Removed {int(bad.sum()):,} rows where '{column}' was not one of the {len(known)} known values.")
+
+
 OPERATIONS: Dict[str, Callable] = {f.__name__: f for f in (
     rename_column, scale_column, convert_to_number, remove_duplicates, fill_missing, drop_rows_missing,
-    drop_column, standardize_categories)}
+    drop_column, standardize_categories, drop_rows_outside_range, drop_rows_not_in)}
+ROW_DROPS = ("remove_duplicates", "drop_rows_missing", "drop_rows_outside_range", "drop_rows_not_in")
 
 
 def apply_operations(df: pd.DataFrame, baseline_profile: Dict[str, Any], operations: List[Dict[str, Any]]):
@@ -167,6 +191,14 @@ TOOLS = [
     _tool("drop_column", "Remove a column, e.g. one that is new and unexpected.", {**COLUMN, **REASON}),
     _tool("standardize_categories", "Map values that match a known baseline value apart from upper/lower case or "
                                     "spaces onto the baseline's spelling.", {**COLUMN, **REASON}),
+    _tool("drop_rows_outside_range", "Remove rows whose value in a numeric column is below min or above max. This "
+                                     "deletes data: only for rows that break an explicit rule (rules.min / rules.max) "
+                                     "and cannot be corrected.",
+          {**COLUMN, "min": {"type": ["number", "null"]}, "max": {"type": ["number", "null"]}, **REASON}),
+    _tool("drop_rows_not_in", "Remove rows whose value is not one of the given values (default: the baseline's "
+                              "known values). This deletes data: standardize spelling first, and only remove what "
+                              "is still invalid.",
+          {**COLUMN, "values": {"type": ["array", "null"], "items": {"type": "string"}}, **REASON}),
     _tool("undo_last", "Undo the most recent repair."),
 ]
 
@@ -184,6 +216,10 @@ Only repair what the evidence supports:
 - Do not invent data. Missing columns cannot be recreated, and filling empty identifiers would be fabrication; \
 leave those for a person and say so.
 - New columns are usually harmless; remove one only if it clearly does not belong.
+- Issues from `rules.*` checks are rules the project wrote. Correct the values first (scale, convert, \
+standardize); remove rows only when what is left still breaks the rule, and say how many rows went.
+- If the person reviewing gives an instruction, follow it when the evidence supports it, and explain in \
+not_fixed when it doesn't.
 
 When you are done, summarize. You only ever see counts and statistics, never the data itself."""
 
@@ -217,12 +253,13 @@ Never guess: if the statistics don't clearly support a match, leave it and list 
 apply are replayed automatically on every future load once a person approves them. You only ever see counts and \
 statistics, never the data itself."""
 
-MAP_TOOLS = [t for t in TOOLS if t["name"] not in ("fill_missing", "drop_rows_missing")]
+MAP_TOOLS = [t for t in TOOLS if t["name"] not in ("fill_missing", *ROW_DROPS[1:])]
 
 
 def _repair_intro(session, before) -> str:
+    asked = f"\nThe person reviewing asks: {session.instructions.strip()}" if session.instructions.strip() else ""
     return (f"This batch has {len(session.original):,} rows and failed with {len(before.issues)} issue(s). "
-            "Repair what can safely be repaired.")
+            f"Repair what can safely be repaired.{asked}")
 
 
 def _map_intro(session, before) -> str:
@@ -243,6 +280,7 @@ class RepairSession:
     cfg: Config
     reference: Optional[pd.DataFrame] = None  # the baseline's rows, so the ML drift check runs too
     operations: List[Dict[str, Any]] = field(default_factory=list)
+    instructions: str = ""  # what the person reviewing asked for, e.g. "amounts are in cents"
 
     allowed: Optional[set] = None  # tool names the agent may use; None means all
 

@@ -269,6 +269,72 @@ def check_ml_drift(reference: pd.DataFrame, df: pd.DataFrame, cfg: Config) -> Li
                               "how these columns relate to each other (which per-column checks cannot see).")]
 
 
+def _blank(s: pd.Series) -> pd.Series:
+    return s.isna() | (s.astype("string").str.strip() == "").fillna(False)
+
+
+def rule_violations(df: pd.DataFrame, cfg: Config) -> List[Dict[str, Any]]:
+    """Every explicit rule a row breaks: [{kind, column, mask, title}]. A rule on a column the data lacks has
+    mask None. Shared by the `rules` check (counts) and the bad-rows view (which rows)."""
+    out: List[Dict[str, Any]] = []
+    for col, rule in cfg.rules.columns.items():
+        if col not in df.columns:
+            out.append({"kind": "missing_column", "column": col, "mask": None,
+                        "title": f"Rule column '{col}' is not in the data"})
+            continue
+        s = df[col]
+        present = ~_blank(s)
+        text = s.astype("string")
+
+        def add(kind: str, mask: pd.Series, title: str) -> None:
+            mask = mask.fillna(False).astype(bool)
+            if mask.any():
+                out.append({"kind": kind, "column": col, "mask": mask, "title": title})
+
+        if rule.required:
+            add("required", ~present, f"'{col}' is empty but required")
+        if rule.unique:
+            add("unique", present & s.duplicated(keep="first"), f"'{col}' repeats but must be unique")
+        if rule.min is not None or rule.max is not None:
+            numbers = pd.to_numeric(s, errors="coerce")
+            add("number", present & numbers.isna(), f"'{col}' has values that are not numbers")
+            if rule.min is not None:
+                add("min", numbers < rule.min, f"'{col}' is below the minimum {_n(rule.min)}")
+            if rule.max is not None:
+                add("max", numbers > rule.max, f"'{col}' is above the maximum {_n(rule.max)}")
+        if rule.allowed is not None:
+            add("allowed", present & ~text.isin(rule.allowed), f"'{col}' has values that are not allowed")
+        if rule.pattern is not None:
+            add("pattern", present & ~text.str.contains(rule.pattern, regex=True), f"'{col}' doesn't match its pattern")
+    return out
+
+
+def check_rules(df: pd.DataFrame, cfg: Config) -> List[Issue]:
+    sev, n, out = cfg.rules.severity, len(df), []
+    for v in rule_violations(df, cfg):
+        col = v["column"]
+        if v["mask"] is None:
+            out.append(Issue("rules.missing_column", sev, v["title"],
+                             f"A rule is written for '{col}', but the data has no such column, so it could not be "
+                             "checked.", [col], {"rule_column_present": False},
+                             explanation="The column may have been renamed or dropped, or the rule has a typo."))
+            continue
+        bad = int(v["mask"].sum())
+        values = df.loc[v["mask"], col].map(lambda x: "(empty)" if pd.isna(x) else str(x)).value_counts()
+        rule = cfg.rules.columns[col]
+        limit = {"min": rule.min, "max": rule.max, "allowed": ", ".join(rule.allowed or []),
+                 "pattern": rule.pattern}.get(v["kind"])
+        out.append(Issue(f"rules.{v['kind']}", sev, v["title"],
+                         f"{_n(bad)} of {_n(n)} rows ({_pct(bad / n)}) break the rule on '{col}'"
+                         + (f" ({v['kind']}: {limit})." if limit not in (None, "") else "."),
+                         [col], {"rows_breaking_rule": bad, "rate": round(bad / n, 4), "rule": v["kind"]},
+                         examples=[f"{k} ({c} rows)" for k, c in values.head(cfg.report.max_examples).items()]
+                         if cfg.report.show_values else [],
+                         explanation="These rows break a rule written for this project. Fix them at the source, "
+                                     "or use Fix bad rows to correct or remove them in a copy."))
+    return out
+
+
 def _consumers_for(issue: Issue, cfg: Config) -> List[Dict[str, Any]]:
     cols = set(issue.columns)
     out = []
@@ -295,6 +361,7 @@ def run_checks(baseline: Dict, df: pd.DataFrame, cfg: Config, data_file: str = "
         "distribution": (cfg.distribution.severity != "off", lambda: check_distribution(base, cur, df, cfg)),
         "ml_drift": (cfg.ml_drift.severity != "off" and reference is not None,
                      lambda: check_ml_drift(reference, df, cfg)),
+        "rules": (cfg.rules.severity != "off" and bool(cfg.rules.columns), lambda: check_rules(df, cfg)),
     }
     ran = [name for name, (enabled, _) in checks.items() if enabled]
     issues = [issue for name in ran for issue in checks[name][1]()]

@@ -64,7 +64,7 @@ def validate_recipe(recipe: Any) -> List[Dict[str, Any]]:
         if not isinstance(step, dict) or step.get("operation") not in OPERATIONS or not isinstance(step.get("args"), dict):
             raise ValueError("Each step needs a known operation and its arguments.")
         args = step["args"]
-        if not all(isinstance(k, str) and isinstance(v, (str, int, float, list)) for k, v in args.items()):
+        if not all(isinstance(k, str) and (v is None or isinstance(v, (str, int, float, list))) for k, v in args.items()):
             raise ValueError("Step arguments must be plain values.")
         clean.append({"operation": step["operation"], "args": args, "reason": str(step.get("reason", ""))[:500]})
     return clean

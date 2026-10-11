@@ -302,3 +302,58 @@ def test_repair_agent_endpoint_download_and_recheck(client, monkeypatch):
     assert recheck["data_file"] == "orders_drifted-fixed.csv" and len(recheck["issues"]) == fix["after"]["total"]
     runs = client.get(f"/api/projects/{seeded['id']}").json()["runs"]
     assert [r["report"]["data_file"] for r in runs[:2]] == ["orders_drifted-fixed.csv", "orders_drifted.csv"]
+
+
+def test_bad_rows_preview_fix_and_agent(client, monkeypatch):
+    from fake_claude import FakeClaude, text, tool_calls
+    seeded = client.post("/api/demo/seed").json()
+    pid = seeded["id"]
+    config = (ROOT / "examples" / "datapulse.yml").read_text().replace(
+        "\nchecks:\n", "\nchecks:\n  rules:\n    columns:\n      amount: {min: 0, max: 1000}\n")
+    assert client.put(f"/api/projects/{pid}/config", json={"config_yaml": config}).status_code == 200
+    drifted = (ROOT / "examples" / "data" / "orders_drifted.csv").read_bytes()
+    doc = client.post(f"/api/projects/{pid}/runs", files={"file": ("orders_drifted.csv", drifted, "text/csv")}).json()
+    base = f"/api/projects/{pid}/runs/{doc['run_id']}/rows"
+
+    found = client.post(base, json={}).json()
+    assert found["preview"] is None and found["rows"]["bad_rows"] == found["rows"]["total_rows"] == 380
+    assert ("rules", "max", "amount") in {(s["rule"], s["kind"], s["column"]) for s in found["rows"]["summary"]}
+    chosen = [s for s in found["suggestions"] if s["default"]]
+    assert [s["operation"] for s in chosen] == ["scale_column", "convert_to_number", "remove_duplicates"]
+
+    preview = client.post(base, json={"operations": chosen}).json()["preview"]
+    assert preview["removed_rows"] == 10 and preview["after"]["total"] < preview["before"]["total"]
+    assert client.post(base, json={"operations": [{"operation": "exec", "args": {}}]}).status_code == 422
+    assert client.post(f"{base}/fix", json={"operations": []}).status_code == 422
+
+    fixed = client.post(f"{base}/fix", json={"operations": chosen}).json()
+    assert fixed["data_file"] == "orders_drifted (fixed).csv" and fixed["fixed_from"]["run_id"] == doc["run_id"]
+    assert len(fixed["issues"]) == preview["after"]["total"] and fixed["rows"]["current"] == 370
+    assert len(fixed["fix_steps"]) == 3
+    runs = client.get(f"/api/projects/{pid}").json()["runs"]
+    assert runs[0]["id"] == fixed["run_id"] and runs[1]["id"] == doc["run_id"]  # the original run is untouched
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert client.post(f"{base}/agent", json={"instructions": "amounts are in cents"}).status_code == 503
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    fake = FakeClaude([tool_calls(("scale_column", {"column": "amount", "factor": 0.01, "reason": "cents"})),
+                       text(json.dumps({"summary": "Scaled amounts.", "not_fixed": [], "warnings": []}))])
+    monkeypatch.setattr("datapulse.fix.get_client", lambda cfg: fake)
+    agent = client.post(f"{base}/agent", json={"instructions": "amounts are in cents"}).json()
+    assert agent["summary"] == "Scaled amounts." and agent["operations"][0]["args"] == {"column": "amount", "factor": 0.01}
+    assert "fixed_frame" not in agent and "The person reviewing asks: amounts are in cents" in fake.sent()
+    sent = fake.sent()
+    assert "C0102" not in sent and "WELCOME" not in sent and "10391" not in sent  # only counts and statistics
+
+
+def test_bad_rows_of_a_unified_table_say_which_source(client):
+    seeded = client.post("/api/demo/seed").json()
+    pid = seeded["id"]
+    sources = client.get(f"/api/projects/{pid}/sources").json()
+    shop = next(s for s in sources if s["name"] == "Store system")
+    proposal = client.post(f"/api/projects/{pid}/sources/{shop['id']}/map").json()
+    client.put(f"/api/projects/{pid}/sources/{shop['id']}/recipe", json={"operations": proposal["operations"]})
+    unified = client.post(f"/api/projects/{pid}/unify").json()
+    found = client.post(f"/api/projects/{pid}/runs/{unified['run_id']}/rows", json={}).json()["rows"]
+    assert found["bad_rows"] > 0 and "_source" not in found["columns"]
+    assert {r["source"] for r in found["rows"]} == {"Store system"}  # the standard's own rows are fine

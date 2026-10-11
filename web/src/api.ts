@@ -18,7 +18,25 @@ export type Report = {
   source?: { id: string; name: string; kind: string; type?: string; rows_pulled: number; mapped: boolean; steps: string[]; problems: string[] }
   unified?: { sources: Array<{ name: string; kind: string; type?: string; rows: number; error: string | null; problems: string[] }> }
   delivered?: Delivery[]
+  fixed_from?: { run_id: string; data_file: string }; fix_steps?: string[]; fix_problems?: string[]
 }
+export type FlagSeverity = Severity | 'standard'
+export type CellFlag = { rule: string; reason: string; severity: FlagSeverity }
+export type BadRow = {
+  row: number; source: string | null; values: Record<string, string | null> | null
+  cells: Record<string, CellFlag[]>; row_flags: CellFlag[]
+}
+export type RowRule = { rule: string; label: string; kind: string; column: string | null; rows: number; severity: FlagSeverity }
+export type BadRows = {
+  total_rows: number; bad_rows: number; failing_rows: number; columns: string[]
+  summary: RowRule[]; rows: BadRow[]; shown: number; show_values: boolean
+}
+export type FixStep = Step & { rows?: number; default?: boolean; by_ai?: boolean }
+export type RowFixPreview = {
+  effects: string[]; problems: string[]; before: Counts; after: Counts; remaining: string[]
+  removed_rows: number; removed: number[]; rows: BadRows
+}
+export type RowsResult = { rows: BadRows; suggestions: FixStep[]; preview: RowFixPreview | null }
 export type ColumnChart = {
   null_rate: [number, number | null]
   hist?: { edges: number[]; baseline: number[]; current: number[] }
@@ -142,6 +160,12 @@ export const api = {
   removeDestination: (id: string, did: string) => request('DELETE', `/api/projects/${id}/destinations/${did}`),
   sendRun: (id: string, run: string) => request<{ delivered: Delivery[] }>('POST', `/api/projects/${id}/runs/${run}/send`),
   unify: (id: string) => request<Report & { run_id: string }>('POST', `/api/projects/${id}/unify`),
+  badRows: (id: string, run: string, operations?: Step[]) =>
+    request<RowsResult>('POST', `/api/projects/${id}/runs/${run}/rows`, { operations: operations ?? null }),
+  rowsAgent: (id: string, run: string, instructions: string) =>
+    request<Omit<Fix, 'file_name'>>('POST', `/api/projects/${id}/runs/${run}/rows/agent`, { instructions }),
+  fixRows: (id: string, run: string, operations: Step[]) =>
+    request<Report & { run_id: string }>('POST', `/api/projects/${id}/runs/${run}/rows/fix`, { operations }),
   checkFixed: (id: string, run: string) => request<Report & { run_id: string }>('POST', `/api/projects/${id}/runs/${run}/fixed/check`),
   fixedUrl: (id: string, run: string) => `${API}/api/projects/${id}/runs/${run}/fixed`,
   review: (id: string, run: string, status: ReviewStatus) => request<Review>('PUT', `/api/projects/${id}/runs/${run}/review`, { status }),

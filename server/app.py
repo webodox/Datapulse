@@ -30,9 +30,11 @@ from datapulse.ai import draft_rules, get_api_key
 from datapulse.config import STARTER_CONFIG, Config
 from datapulse.errors import DataPulseError
 from datapulse.fix import RepairSession, run_repair
+from datapulse.checks import run_checks
 from datapulse.profile import profile_dataframe
+from datapulse.rows import ROW, apply_fixes, bad_rows, preview_fixes, suggest_fixes
 from datapulse.suggest import render_yaml, suggest_rules
-from datapulse.unify import SOURCE_COLUMN
+from datapulse.unify import SOURCE_COLUMN, validate_recipe
 
 from .auth import current_user, needs_login, router as auth_router
 from .core import (MAX_INGEST_ROWS, MAX_UPLOAD_BYTES, ROOT, ai_call, baseline_summary, dataset_rows, handle_data,
@@ -88,6 +90,14 @@ class DraftRules(BaseModel):
 
 class Review(BaseModel):
     status: Literal["open", "acknowledged", "resolved"]
+
+
+class RowFixes(BaseModel):
+    operations: Optional[list] = Field(default=None, max_length=100)
+
+
+class RowAgent(BaseModel):
+    instructions: str = Field(default="", max_length=1_000)
 
 
 class IngestRows(BaseModel):
@@ -386,6 +396,73 @@ def check_fixed(project_id: str, run_id: str, request: Request) -> dict:
     """Run a normal check on the repaired file, so it shows up in the history next to the original."""
     path, name = _fixed_file(project_id, run_id)
     return run_check(project_row(project_id), name, path, load_upload(path), False, request.state.user["name"])
+
+
+def _rows_context(project_id: str, run_id: str) -> tuple:
+    """(project, run report, the run's stored data, its source column or None, config, baseline, baseline rows)."""
+    project, run = project_row(project_id), _run_row(project_id, run_id)
+    if not project["baseline_json"]:
+        raise HTTPException(409, "Set the standard format first")
+    df = dataset_rows(run["dataset_id"])
+    if df is None:
+        raise HTTPException(404, "The data for this check is no longer stored")
+    source = SOURCE_COLUMN if SOURCE_COLUMN in df.columns else None
+    return (project, json.loads(run["report_json"]), df, source, project_config(project["config_yaml"]),
+            json.loads(project["baseline_json"]), dataset_rows(project["baseline_dataset_id"]))
+
+
+def _steps(operations: Any) -> list:
+    try:
+        return validate_recipe(operations)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/runs/{run_id}/rows")
+def run_bad_rows(project_id: str, run_id: str, payload: RowFixes) -> dict:
+    """The rows that break the current rules or differ from the standard, with suggested fixes. With
+    `operations`, also a preview of what those steps would do. Nothing is saved."""
+    _, doc, df, source, cfg, baseline, reference = _rows_context(project_id, run_id)
+    data = df.drop(columns=[source]) if source else df
+    issues = run_checks(baseline, data, cfg, reference=reference).issues
+    out = {"rows": bad_rows(df, baseline, cfg, issues, source),
+           "suggestions": suggest_fixes(df, baseline, cfg, issues, source), "preview": None}
+    if payload.operations is not None:
+        out["preview"] = preview_fixes(df, baseline, cfg, _steps(payload.operations), issues, source,
+                                       reference=reference, combined=bool(doc.get("unified")))
+    return out
+
+
+@app.post("/api/projects/{project_id}/runs/{run_id}/rows/agent")
+def run_rows_agent(project_id: str, run_id: str, payload: RowAgent) -> dict:
+    """Ask the repair agent for fix steps, optionally with an instruction. Returns the steps for review; nothing
+    is applied or saved."""
+    _, _, df, source, cfg, baseline, reference = _rows_context(project_id, run_id)
+    session = RepairSession(df.drop(columns=[source]) if source else df, baseline, cfg, reference=reference,
+                            instructions=payload.instructions)
+    result = ai_call(lambda: run_repair(session))
+    result.pop("fixed_frame")
+    return result
+
+
+@app.post("/api/projects/{project_id}/runs/{run_id}/rows/fix")
+def fix_bad_rows(project_id: str, run_id: str, payload: RowFixes, request: Request) -> dict:
+    """Apply the approved steps to a copy of the run's data and check the copy. The original is never changed."""
+    project, doc, df, source, _, baseline, _ = _rows_context(project_id, run_id)
+    steps = _steps(payload.operations or [])
+    if not steps:
+        raise HTTPException(422, "Choose at least one fix")
+    fixed, effects, problems = apply_fixes(df, baseline["profile"], steps, source)
+    if not effects:
+        raise HTTPException(422, "None of the chosen fixes could be applied: " + "; ".join(problems))
+    fixed = fixed.drop(columns=[ROW])
+    stem = Path(doc.get("data_file") or "data").stem
+    path = upload_dir() / f"{uuid.uuid4().hex}.csv"
+    fixed.to_csv(path, index=False)
+    extra = {"fixed_from": {"run_id": run_id, "data_file": doc.get("data_file")}, "fix_steps": effects,
+             "fix_problems": problems}
+    return run_check(project, f"{stem} (fixed).csv", path, fixed, False, request.state.user["name"], extra,
+                     checked=fixed.drop(columns=[source]) if source else None, combined=bool(doc.get("unified")))
 
 
 @app.put("/api/projects/{project_id}/runs/{run_id}/review")

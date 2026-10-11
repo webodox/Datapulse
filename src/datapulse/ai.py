@@ -39,10 +39,12 @@ report, discovery, ai
 - checks.duplicates: severity, max_duplicate_rate (0-1), columns (key columns that must be unique)
 - checks.distribution: severity, psi_threshold, max_mean_shift_std, columns (list)
 - checks.ml_drift: severity, max_auc (0.5-1), max_rows, exclude (list)
+- checks.rules: severity, columns (map column -> {required: bool, unique: bool, min: number, max: number, \
+allowed: [values], pattern: regex}) - explicit rules every row must follow, e.g. amount: {min: 0}
 - consumers: map name -> {type, owner, description, columns (list, required)}
 Severities: critical | warning | info | off. Use only column names that exist in the dataset profile. If part of \
-the request can't be expressed with these keys (e.g. an explicit allowed-values list or a value range), leave it \
-out and list it under `not_supported` with the closest supported alternative."""
+the request can't be expressed with these keys, leave it out and list it under `not_supported` with the closest \
+supported alternative."""
 
 EXPLAIN_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["explanations"],

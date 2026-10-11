@@ -1,6 +1,7 @@
 """Loading and strict validation of datapulse.yml."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -67,6 +68,23 @@ class MLDriftCfg:
 
 
 @dataclass
+class ColumnRule:
+    """Rules a person writes for one column. Unlike the other checks they don't depend on the baseline."""
+    required: bool = False
+    unique: bool = False
+    min: Optional[float] = None
+    max: Optional[float] = None
+    allowed: Optional[List[str]] = None
+    pattern: Optional[str] = None
+
+
+@dataclass
+class RulesCfg:
+    severity: str = "critical"
+    columns: Dict[str, ColumnRule] = field(default_factory=dict)
+
+
+@dataclass
 class Consumer:
     name: str
     type: str
@@ -109,6 +127,7 @@ class Config:
     duplicates: DuplicatesCfg = field(default_factory=DuplicatesCfg)
     distribution: DistributionCfg = field(default_factory=DistributionCfg)
     ml_drift: MLDriftCfg = field(default_factory=MLDriftCfg)
+    rules: RulesCfg = field(default_factory=RulesCfg)
     consumers: List[Consumer] = field(default_factory=list)
     report: ReportCfg = field(default_factory=ReportCfg)
     ai: AICfg = field(default_factory=AICfg)
@@ -155,6 +174,13 @@ checks:
   ml_drift:                   # a model learns to tell baseline rows from new rows; needs the baseline file
     severity: warning
     max_auc: 0.7              # 0.5 = indistinguishable (no drift), 1.0 = completely different
+  rules:                      # rules you write per column; every row must follow them
+    severity: critical
+    # columns:
+    #   order_id: {required: true, unique: true}
+    #   amount: {min: 0}
+    #   status: {allowed: [placed, shipped, delivered, cancelled]}
+    #   email: {pattern: '^[^@ ]+@[^@ ]+$'}
 
 # Map columns to the things that read them so reports can show who is affected.
 # consumers:
@@ -250,6 +276,40 @@ def _rate_map(v, path: str) -> Dict[str, float]:
     return {str(c): _number(0, 1)(x, f"{path}.{c}") for c, x in _mapping(v, path, v or {}).items()}
 
 
+RULE_KEYS = ("required", "unique", "min", "max", "allowed", "pattern")
+
+
+def _column_rules(v, path: str) -> Dict[str, ColumnRule]:
+    out = {}
+    for column, spec in _mapping(v, path, v or {}).items():
+        p = f"{path}.{column}"
+        spec = _mapping(spec, p, RULE_KEYS)
+        if not spec:
+            _fail(f"'{p}' needs at least one of {list(RULE_KEYS)}")
+        rule = ColumnRule()
+        for key in ("required", "unique"):
+            if key in spec:
+                setattr(rule, key, _bool(spec[key], f"{p}.{key}"))
+        for key in ("min", "max"):
+            if spec.get(key) is not None:
+                setattr(rule, key, _number()(spec[key], f"{p}.{key}"))
+        if rule.min is not None and rule.max is not None and rule.min > rule.max:
+            _fail(f"'{p}.min' is larger than '{p}.max'")
+        if "allowed" in spec:
+            allowed = spec["allowed"]
+            if not isinstance(allowed, list) or not allowed:
+                _fail(f"'{p}.allowed' must be a non-empty list of values")
+            rule.allowed = [str(a) for a in allowed]
+        if "pattern" in spec:
+            rule.pattern = _str(spec["pattern"], f"{p}.pattern")
+            try:
+                re.compile(rule.pattern)
+            except re.error as e:
+                _fail(f"'{p}.pattern' is not a valid regular expression: {e}")
+        out[str(column)] = rule
+    return out
+
+
 def _nullable(check):
     """A validator whose explicit `null` is stored (by default `null` keeps the default value)."""
     check.nullable = True
@@ -270,6 +330,7 @@ SECTIONS = {
                                              "max_mean_shift_std": _number(0), "columns": _str_list}),
     "checks.ml_drift": ("ml_drift", {"severity": SEVERITY, "max_auc": _number(0.5, 1), "max_rows": _int(MIN_ML_ROWS),
                                      "exclude": _str_list}),
+    "checks.rules": ("rules", {"severity": SEVERITY, "columns": _column_rules}),
     "report": ("report", {"markdown": _nullable(_str), "max_examples": _int(), "show_values": _bool}),
     "discovery": ("discovery", {"enabled": _bool, "root": _str, "scope": _choice("readers", "all"),
                                 "exclude": _str_list}),

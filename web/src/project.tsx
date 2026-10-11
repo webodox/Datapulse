@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, API_ORIGIN, fmtDate, plural, runTone, timeAgo, SEVERITIES, TONE_LABEL,
   type Issue, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft, type ReviewStatus, type ColumnChart } from './api'
 import type { Route } from './App'
+import { BadRowsSection, FixedNote } from './badrows'
 import { BeforeAfter, NullRates } from './charts'
 import { SourceNote, SourcesTab, UnifiedNote } from './sources'
 import { Icon, type IconName } from './icons'
@@ -155,6 +156,8 @@ function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectI
     {report.issues.length > 0 && <ReviewBar run={run} projectId={projectId} changed={changed} />}
     {report.source && <SourceNote projectId={projectId} run={run} />}
     {report.unified && <UnifiedNote projectId={projectId} run={run} changed={changed} />}
+    <FixedNote run={run} select={select} />
+    <BadRowsSection key={run.id} run={run} projectId={projectId} ai={ai} changed={changed} select={select} />
     {report.issues.length > 0 && <InvestigateSection run={run} projectId={projectId} ai={ai} changed={changed} select={select} />}
 
     {counts.length > 1 && <div className="filters">
