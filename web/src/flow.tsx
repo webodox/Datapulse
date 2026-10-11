@@ -10,7 +10,7 @@ const RULES: Record<string, string> = {
   schema: 'columns & types', row_count: 'row count', null_rate: 'empty values', categorical: 'allowed values',
   duplicates: 'duplicates', distribution: 'value ranges', ml_drift: 'learned drift',
 }
-const ruleName = (check: string) => RULES[check] ?? check.replace(/_/g, ' ')
+export const ruleName = (check: string) => RULES[check] ?? check.replace(/_/g, ' ')
 
 /** The most recent check of one source, from the project's recent runs. */
 export const lastCheckOf = (detail: ProjectDetail, source: Source) => detail.runs.find(r => r.report.source?.id === source.id)

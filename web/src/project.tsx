@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, API_ORIGIN, fmtDate, plural, runTone, timeAgo, SEVERITIES, TONE_LABEL,
   type Issue, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft, type ReviewStatus, type ColumnChart } from './api'
 import type { Route } from './App'
 import { BeforeAfter, NullRates } from './charts'
+import { ruleName } from './flow'
 import { SourceNote, SourcesTab, UnifiedNote } from './sources'
 import { Icon, type IconName } from './icons'
 import { CodeBlock, copyText, Dropzone, Empty, Menu, Spinner, useAction, useNotify } from './ui'
@@ -113,27 +114,8 @@ function RunHistory({ runs, selected, select }: { runs: Run[]; selected: string;
 
 function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; select: (id?: string) => void }) {
   const notify = useNotify()
-  const [filter, setFilter] = useState<Severity | null>(null)
-  const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({})
   const { report } = run
   const tone = runTone(run)
-  const counts = SEVERITIES.map(s => [s, report.issues.filter(i => i.severity === s).length] as const).filter(([, n]) => n)
-  const shown = report.issues.filter(i => !filter || i.severity === filter)
-
-  const issueKey = (issue: Issue, idx: number) => {
-    const rawIdx = report.issues.indexOf(issue)
-    return `${issue.check}-${issue.columns.join(',')}-${rawIdx >= 0 ? rawIdx : idx}`
-  }
-
-  const allExpanded = shown.length > 0 && shown.every((issue, i) => !!expandedMap[issueKey(issue, i)])
-  const toggleAll = () => {
-    const next = !allExpanded
-    const updated: Record<string, boolean> = { ...expandedMap }
-    shown.forEach((issue, i) => {
-      updated[issueKey(issue, i)] = next
-    })
-    setExpandedMap(updated)
-  }
 
   return <section className="card report">
     <div className={`verdict ${tone}`}>
@@ -151,58 +133,73 @@ function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectI
     {report.unified && <UnifiedNote projectId={projectId} run={run} changed={changed} />}
     {report.issues.length > 0 && <InvestigateSection run={run} projectId={projectId} ai={ai} changed={changed} select={select} />}
 
-    {report.issues.length > 0 && <div className="issues-toolbar">
-      {counts.length > 1 ? <div className="filters">
-        <button className={!filter ? 'on' : ''} onClick={() => setFilter(null)}>All {report.issues.length}</button>
-        {counts.map(([s, n]) => <button key={s} className={`${s} ${filter === s ? 'on' : ''}`} onClick={() => setFilter(s)}>
-          <Icon name={SEVERITY_ICON[s]} size={13} /> {n} {s}</button>)}
-      </div> : <span />}
-      {shown.length > 0 && <button className="button ghost small-btn issue-toggle-all" onClick={toggleAll}>
-        <Icon name="chevronDown" size={13} className={`issue-chevron ${allExpanded ? 'open' : ''}`} />
-        {allExpanded ? 'Collapse all' : 'Expand all'}
-      </button>}
-    </div>}
-
-    {shown.map((issue, i) => {
-      const key = issueKey(issue, i)
-      return <IssueCard
-        key={key}
-        issue={issue}
-        charts={report.charts}
-        open={!!expandedMap[key]}
-        onToggle={() => setExpandedMap(prev => ({ ...prev, [key]: !prev[key] }))}
-      />
-    })}
+    {report.issues.length > 0 && <IssueList issues={report.issues} charts={report.charts} />}
     {report.ai_note && <p className="note"><Icon name="sparkle" size={13} /> {report.ai_note}</p>}
-    {report.passed_checks.length > 0 && <p className="passed"><Icon name="check" size={14} /> Passed: {report.passed_checks.map(c => c.replace('_', ' ')).join(', ')}</p>}
+    {report.passed_checks.length > 0 && <p className="passed"><Icon name="check" size={14} /> Passed: {report.passed_checks.map(ruleName).join(', ')}</p>}
   </section>
 }
 
-function IssueCard({ issue, charts, open, onToggle }: { issue: Issue; charts?: Record<string, ColumnChart>; open?: boolean; onToggle?: () => void }) {
-  const [localOpen, setLocalOpen] = useState(false)
-  const isExpanded = open !== undefined ? open : localOpen
-  const toggle = onToggle || (() => setLocalOpen(o => !o))
-  const measured = Object.entries(issue.measured || {})
+const PAGE = 25
+const RANK: Record<Severity, number> = { critical: 0, warning: 1, info: 2 }
 
-  return <article className={`issue ${issue.severity}${isExpanded ? ' expanded' : ' collapsed'}`}>
-    <header
-      className="issue-head"
-      onClick={toggle}
-      role="button"
-      tabIndex={0}
-      aria-expanded={isExpanded}
-      aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${issue.title} message`}
-      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() } }}
-    >
-      <div className="issue-title-group">
-        <span className={`pill ${issue.severity}`}><Icon name={SEVERITY_ICON[issue.severity]} size={12} /> {issue.severity}</span>
-        <h3>{issue.title}</h3>
+/** Every issue as one line, worst first; filter, search and page through them, and open one at a time. */
+function IssueList({ issues, charts }: { issues: Issue[]; charts?: Record<string, ColumnChart> }) {
+  const [severity, setSeverity] = useState<Severity | null>(null)
+  const [rule, setRule] = useState('')
+  const [query, setQuery] = useState('')
+  const [limit, setLimit] = useState(PAGE)
+  const [opened, setOpened] = useState<number | null>(null)
+  const sorted = useMemo(() => issues.map((issue, i) => ({ issue, i })).sort((a, b) => RANK[a.issue.severity] - RANK[b.issue.severity]), [issues])
+  const counts = SEVERITIES.map(s => [s, issues.filter(i => i.severity === s).length] as const).filter(([, n]) => n)
+  const rules = useMemo(() => {
+    const byRule = new Map<string, number>()
+    issues.forEach(i => byRule.set(i.check, (byRule.get(i.check) || 0) + 1))
+    return [...byRule].sort((a, b) => b[1] - a[1])
+  }, [issues])
+  const q = query.trim().toLowerCase()
+  const matches = sorted.filter(({ issue }) => (!severity || issue.severity === severity) && (!rule || issue.check === rule)
+    && (!q || `${issue.title} ${issue.columns.join(' ')} ${issue.measured_summary}`.toLowerCase().includes(q)))
+  const refine = (change: () => void) => { change(); setLimit(PAGE); setOpened(null) }
+
+  return <section className="issue-list" aria-label="Issues">
+    <div className="issues-toolbar">
+      <div className="filters">
+        <button className={!severity ? 'on' : ''} onClick={() => refine(() => setSeverity(null))}>All {issues.length}</button>
+        {counts.length > 1 && counts.map(([s, n]) => <button key={s} className={`${s} ${severity === s ? 'on' : ''}`} onClick={() => refine(() => setSeverity(s))}>
+          <Icon name={SEVERITY_ICON[s]} size={13} /> {n} {s}</button>)}
       </div>
-      <Icon name="chevronDown" size={16} className={`issue-chevron ${isExpanded ? 'open' : ''}`} />
-    </header>
+      {(rules.length > 1 || issues.length > 10) && <div className="issue-find">
+        {rules.length > 1 && <select className="search" value={rule} onChange={e => refine(() => setRule(e.target.value))} aria-label="Filter by rule">
+          <option value="">All rules</option>
+          {rules.map(([r, n]) => <option key={r} value={r}>{ruleName(r)} ({n})</option>)}
+        </select>}
+        {issues.length > 10 && <input className="search" value={query} onChange={e => refine(() => setQuery(e.target.value))}
+          placeholder="Search issues or columns…" aria-label="Search issues" />}
+      </div>}
+    </div>
 
-    {isExpanded && <div className="issue-body">
-      <p className="issue-summary">{issue.measured_summary}</p>
+    {matches.length ? <ul className="issue-rows">{matches.slice(0, limit).map(({ issue, i }) =>
+      <IssueRow key={i} issue={issue} charts={charts} open={opened === i} toggle={() => setOpened(o => o === i ? null : i)} />)}</ul>
+      : <p className="muted pad">No issues match these filters.</p>}
+    {matches.length > limit && <div className="issue-more">
+      <span className="muted">Showing {limit} of {matches.length}</span>
+      <button className="button ghost" onClick={() => setLimit(l => l + 100)}>Show {Math.min(100, matches.length - limit)} more</button>
+    </div>}
+  </section>
+}
+
+function IssueRow({ issue, charts, open, toggle }: { issue: Issue; charts?: Record<string, ColumnChart>; open: boolean; toggle: () => void }) {
+  const measured = Object.entries(issue.measured || {})
+  return <li className={`issue-row ${issue.severity} ${open ? 'open' : ''}`}>
+    <button className="issue-line" aria-expanded={open} onClick={toggle}>
+      <i className={`sev ${issue.severity}`} title={issue.severity} />
+      <b>{issue.title}</b>
+      <span className="issue-meta">{issue.measured_summary}</span>
+      <Icon name="chevronDown" size={15} className={`issue-chevron ${open ? 'open' : ''}`} />
+    </button>
+
+    {open && <div className="issue-body">
+      <p className="issue-summary"><span className={`pill ${issue.severity}`}>{issue.severity}</span> {issue.measured_summary}</p>
       {issue.check === 'ml_drift' && <DriftBars issue={issue} />}
       <IssueChart issue={issue} charts={charts} />
       {issue.suggested_explanation && <p className="cause"><b>Possible cause</b> {issue.suggested_explanation}</p>}
@@ -216,7 +213,7 @@ function IssueCard({ issue, charts, open, onToggle }: { issue: Issue; charts?: R
         <small className="muted">Check: <code>{issue.check}</code></small>
       </details>}
     </div>}
-  </article>
+  </li>
 }
 
 /* ---------- shared issue status ---------- */
@@ -308,42 +305,44 @@ function InvestigateSection({ run, projectId, ai, changed, select }:
       {triage && <button className="button ghost" onClick={() => copyText(triage.message, notify, 'Message copied')}><Icon name="copy" size={14} /> Copy message to team</button>}
     </div>
 
-    <div className="folds">
-      {triage && triage.root_causes.length > 0 && <Fold title="What went wrong" count={triage.root_causes.length}>
-        <p className="muted">{triage.verdict_reason}</p>
-        <ol className="causes">{triage.root_causes.map((c, i) => <li key={i}><span className={`conf ${c.confidence}`}>{c.confidence}</span>
-          <div><b>{c.hypothesis}</b><small>{c.evidence}</small></div></li>)}</ol>
-      </Fold>}
-      {fix && fix.operations.length > 0 && <Fold title="What the AI fixed" count={fix.operations.length}>
-        <p className="muted">{fix.summary}</p>
-        <ol className="causes">{fix.operations.map((op, i) => <li key={i}><span className="conf done">fixed</span>
-          <div><b>{op.effect}</b><small>{op.reason}</small></div></li>)}</ol>
-        {fix.warnings.map((w, i) => <p key={i} className="note"><Icon name="info" size={13} /> {w}</p>)}
-      </Fold>}
-      {fix && fix.not_fixed.length > 0 && <Fold title="Left for a person" count={fix.not_fixed.length}>
-        <ul className="notify">{fix.not_fixed.map((n, i) => <li key={i}><b>{n.issue}</b> {n.why}</li>)}</ul>
-      </Fold>}
-      {triage && triage.actions.length > 0 && <Fold title="Next steps" count={triage.actions.length}>
-        <ul className="checklist">{triage.actions.map((a, i) => <li key={i}><label><input type="checkbox" /> <span>{a.step}</span> <em>{a.owner}</em></label></li>)}</ul>
-      </Fold>}
-      {triage && triage.notify.length > 0 && <Fold title="Who to tell" count={triage.notify.length}>
-        <ul className="notify">{triage.notify.map((n, i) => <li key={i}><b>{n.who}</b> {n.why}</li>)}</ul>
-      </Fold>}
-      {triage && <Fold title="Message to send"><CodeBlock code={triage.message} label="Copy message" /></Fold>}
-      {triage && triage.steps.length > 0 && <Fold title="How the agent investigated" count={triage.steps.length}>
-        <ol className="agent-steps">{triage.steps.map((s, i) => <li key={i}>{describeStep(s)}</li>)}</ol>
-      </Fold>}
-    </div>
+    {triage && triage.root_causes.length > 0 && <div className="ai-part">
+      <h4>What went wrong</h4>
+      <p className="muted">{triage.verdict_reason}</p>
+      <ol className="causes">{triage.root_causes.map((c, i) => <li key={i}><span className={`conf ${c.confidence}`}>{c.confidence}</span>
+        <div><b>{c.hypothesis}</b><small>{c.evidence}</small></div></li>)}</ol>
+    </div>}
+    {triage && triage.actions.length > 0 && <div className="ai-part">
+      <h4>Next steps</h4>
+      <ul className="checklist">{triage.actions.map((a, i) => <li key={i}><label><input type="checkbox" /> <span>{a.step}</span> <em>{a.owner}</em></label></li>)}</ul>
+    </div>}
+
+    {(triage || (fix && (fix.operations.length > 0 || fix.not_fixed.length > 0))) && <details className="fold">
+      <summary><span>Full details</span></summary>
+      <div className="fold-body">
+        {fix && fix.operations.length > 0 && <div className="ai-part">
+          <h4>What the AI fixed</h4>
+          <p className="muted">{fix.summary}</p>
+          <ol className="causes">{fix.operations.map((op, i) => <li key={i}><span className="conf done">fixed</span>
+            <div><b>{op.effect}</b><small>{op.reason}</small></div></li>)}</ol>
+          {fix.warnings.map((w, i) => <p key={i} className="note"><Icon name="info" size={13} /> {w}</p>)}
+        </div>}
+        {fix && fix.not_fixed.length > 0 && <div className="ai-part">
+          <h4>Left for a person</h4>
+          <ul className="notify">{fix.not_fixed.map((n, i) => <li key={i}><b>{n.issue}</b> {n.why}</li>)}</ul>
+        </div>}
+        {triage && triage.notify.length > 0 && <div className="ai-part">
+          <h4>Who to tell</h4>
+          <ul className="notify">{triage.notify.map((n, i) => <li key={i}><b>{n.who}</b> {n.why}</li>)}</ul>
+        </div>}
+        {triage && <div className="ai-part"><h4>Message to send</h4><CodeBlock code={triage.message} label="Copy message" /></div>}
+        {triage && triage.steps.length > 0 && <div className="ai-part">
+          <h4>How the agent investigated</h4>
+          <ol className="agent-steps">{triage.steps.map((s, i) => <li key={i}>{describeStep(s)}</li>)}</ol>
+        </div>}
+      </div>
+    </details>}
     {(!triage || !fix) && <div className="actions"><small className="muted">{triage ? 'No repaired copy yet.' : 'No diagnosis yet.'}</small>{button}</div>}
   </section>
-}
-
-/** A collapsed section of the AI panel: title and count, opened on click. */
-function Fold({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
-  return <details className="fold">
-    <summary><span>{title}</span>{count !== undefined && <span className="count">{count}</span>}</summary>
-    <div className="fold-body">{children}</div>
-  </details>
 }
 
 /** One tool call by the triage agent, in words. */
