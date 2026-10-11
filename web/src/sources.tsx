@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, plural, runTone, timeAgo, type Destination, type DestinationForm, type Mapping, type ProjectDetail, type Run, type Source, type SourceKind, type Step } from './api'
 import { FlowDiagram, HealthCards, lastCheckOf, MappingCompare } from './flow'
 import { Icon, type IconName } from './icons'
-import { Empty, Modal, Spinner, useAction, useNotify } from './ui'
+import { Dropzone, Empty, Modal, Spinner, useAction, useNotify } from './ui'
 
 const STATUS: Record<Source['status'], { label: string; tone: string }> = {
   standard: { label: 'Standard', tone: 'clean' },
@@ -96,6 +96,7 @@ export function SourcesTab({ detail, changed, ai, openRun }:
         refresh={refresh} edit={() => setEditing(s)} openRun={openRun} />)}
     </div>}
 
+    {detail.has_baseline && <QuickCheck detail={detail} changed={changed} openRun={openRun} />}
     {detail.has_baseline && <Destinations projectId={detail.id} />}
 
     {editing && <SourceDialog projectId={detail.id} kinds={kinds} source={editing === 'new' ? null : editing}
@@ -328,6 +329,30 @@ export function UnifiedNote({ projectId, run, changed }: { projectId: string; ru
     {run.status === 'passed' && (!delivered.length || delivered.some(d => !d.ok)) &&
       <button className="button ghost" disabled={!!busy} onClick={resend}>{busy ? <Spinner text="Sending…" /> : <><Icon name="upload" size={14} /> Send to your database</>}</button>}
   </div>
+}
+
+/* ---------- quick check: one file against the standard, without adding it as a source ---------- */
+
+function QuickCheck({ detail, changed, openRun }: { detail: ProjectDetail; changed: () => Promise<unknown>; openRun: (run?: string) => void }) {
+  const notify = useNotify()
+  const [busy, run] = useAction()
+  const [useAi, setUseAi] = useState(false)
+  const check = (file: File) => run('check', async () => {
+    const report = await api.upload(detail.id, 'runs', file, useAi)
+    await changed()
+    openRun(report.run_id)
+    notify.ok(report.status === 'failed' ? `Check failed: ${plural(report.issues.length, 'issue')} to review` : 'Check passed')
+  })
+  return <section className="card quick-check">
+    <div className="card-head"><div>
+      <h2>Quick check a file</h2>
+      <p className="muted">Check one file against the standard without adding it as a source. The result opens in Results.</p>
+    </div></div>
+    <Dropzone title="Drop a file to check it once" hint={`Compared with standard v${detail.baseline?.baseline_version} · CSV, Excel, JSON or Parquet`}
+      busy={busy && 'Checking your data…'} onFile={check} />
+    <label className="toggle"><input type="checkbox" checked={useAi} onChange={e => setUseAi(e.target.checked)} />
+      Add AI explanations to each issue</label>
+  </section>
 }
 
 /* ---------- destinations: send unified data into the company's own database ---------- */
