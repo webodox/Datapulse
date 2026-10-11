@@ -35,6 +35,7 @@ from datapulse.suggest import render_yaml, suggest_rules
 from datapulse.unify import SOURCE_COLUMN
 
 from .auth import current_user, needs_login, router as auth_router
+from .auth0 import router as auth0_router
 from .core import (MAX_INGEST_ROWS, MAX_UPLOAD_BYTES, ROOT, ai_call, baseline_summary, dataset_rows, handle_data,
                    loads, project_config, project_row, record_dataset, run_check, save_upload,
                    load_upload)
@@ -60,6 +61,7 @@ app.add_middleware(
     allow_credentials=True,
 )
 app.include_router(auth_router)
+app.include_router(auth0_router)
 app.include_router(sources_router)
 app.include_router(destinations_router)
 

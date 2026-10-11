@@ -3,8 +3,32 @@ import { api, type User } from './api'
 import { Icon } from './icons'
 import { Spinner, useAction, useNotify } from './ui'
 
-/** First run (create the admin account) or sign in. */
-export function SignIn({ setupNeeded, onSignedIn }: { setupNeeded: boolean; onSignedIn: (u: User) => void }) {
+/** Sign-in failures from the Auth0 round trip come back as ?signin_error=…; read once, then cleared from the address. */
+function takeSignInError(): string {
+  const params = new URLSearchParams(window.location.search)
+  const message = params.get('signin_error') || ''
+  if (message) window.history.replaceState(null, '', window.location.pathname + window.location.hash)
+  return message
+}
+
+/** First run (create the admin account) or sign in. With Auth0 on, a single "Continue with Auth0" button. */
+export function SignIn({ setupNeeded, auth0, onSignedIn }: { setupNeeded: boolean; auth0: boolean; onSignedIn: (u: User) => void }) {
+  const [error] = useState(takeSignInError)
+  if (auth0) return <div className="auth-page">
+    <div className="auth-card">
+      <div className="brand"><span className="logo"><Icon name="activity" size={18} /></span>DataPulse</div>
+      <h1>{setupNeeded ? 'Welcome to DataPulse' : 'Sign in'}</h1>
+      <p className="muted">{setupNeeded ? "You're the first person here, so you'll be the admin. You'll add your teammates next."
+        : 'Use Google or your email. Your data stays behind this sign-in.'}</p>
+      {error && <p className="auth-error" role="alert"><Icon name="alert" size={14} /> {error}</p>}
+      <a className="button primary full" href={api.auth0LoginUrl}><Icon name="shield" size={15} /> Continue with Auth0</a>
+      {!setupNeeded && <p className="muted small">No access yet? Ask your DataPulse admin to add your email.</p>}
+    </div>
+  </div>
+  return <PasswordSignIn setupNeeded={setupNeeded} onSignedIn={onSignedIn} />
+}
+
+function PasswordSignIn({ setupNeeded, onSignedIn }: { setupNeeded: boolean; onSignedIn: (u: User) => void }) {
   const [busy, run] = useAction()
   const [form, setForm] = useState({ name: '', email: '', password: '' })
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm(f => ({ ...f, [k]: e.target.value }))
@@ -31,16 +55,16 @@ export function SignIn({ setupNeeded, onSignedIn }: { setupNeeded: boolean; onSi
 }
 
 /** Change your password; admins also manage who has access. */
-export function AccountPage({ user }: { user: User }) {
+export function AccountPage({ user, auth0 }: { user: User; auth0: boolean }) {
   return <div className="account">
     <h1>Account & team</h1>
     <p className="muted">Signed in as <b>{user.name}</b> ({user.email}) · {user.role}</p>
-    {user.role === 'admin' && <Team me={user} />}
-    <ChangePassword />
+    {user.role === 'admin' && <Team me={user} auth0={auth0} />}
+    {!auth0 && <ChangePassword />}
   </div>
 }
 
-function Team({ me }: { me: User }) {
+function Team({ me, auth0 }: { me: User; auth0: boolean }) {
   const notify = useNotify()
   const [busy, run] = useAction()
   const [users, setUsers] = useState<User[]>([])
@@ -51,8 +75,9 @@ function Team({ me }: { me: User }) {
   const add = (e: FormEvent) => {
     e.preventDefault()
     run('add', async () => {
-      await api.addUser(form)
-      notify.ok(`Added ${form.name}. Send them the address of this dashboard and their temporary password.`)
+      await api.addUser(auth0 ? { ...form, password: undefined } : form)
+      notify.ok(auth0 ? `Added ${form.name}. They sign in with Auth0 using ${form.email}.`
+        : `Added ${form.name}. Send them the address of this dashboard and their temporary password.`)
       setForm({ name: '', email: '', password: '', role: 'member' })
       await load()
     })
@@ -76,8 +101,8 @@ function Team({ me }: { me: User }) {
       <div className="grid">
         <input placeholder="Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required maxLength={80} />
         <input placeholder="Email" type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} required />
-        <input placeholder="Temporary password (8+ characters)" value={form.password} minLength={8}
-          onChange={e => setForm({ ...form, password: e.target.value })} required />
+        {!auth0 && <input placeholder="Temporary password (8+ characters)" value={form.password} minLength={8}
+          onChange={e => setForm({ ...form, password: e.target.value })} required />}
         <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value as User['role'] })} aria-label="Role">
           <option value="member">Member</option><option value="admin">Admin</option>
         </select>

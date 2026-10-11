@@ -96,14 +96,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
-  authStatus: () => request<{ setup_needed: boolean; user: User | null }>('GET', '/api/auth/status'),
+  authStatus: () => request<{ setup_needed: boolean; user: User | null; auth0: boolean }>('GET', '/api/auth/status'),
+  auth0LoginUrl: `${API}/api/auth/auth0/login`,
   setup: (name: string, email: string, password: string) => request<User>('POST', '/api/auth/setup', { name, email, password }),
   login: (email: string, password: string) => request<User>('POST', '/api/auth/login', { email, password }),
-  logout: () => request('POST', '/api/auth/logout'),
+  logout: () => request<{ redirect: string | null }>('POST', '/api/auth/logout'),
   changePassword: (current_password: string, new_password: string) =>
     request('PUT', '/api/auth/password', { current_password, new_password }),
   users: () => request<User[]>('GET', '/api/users'),
-  addUser: (u: { name: string; email: string; password: string; role: User['role'] }) => request<User>('POST', '/api/users', u),
+  addUser: (u: { name: string; email: string; password?: string; role: User['role'] }) => request<User>('POST', '/api/users', u),
   removeUser: (id: string) => request('DELETE', `/api/users/${id}`),
   overview: (id: string, run: string) => request<Overview>('POST', `/api/projects/${id}/runs/${run}/overview`),
   runDataUrl: (id: string, run: string) => `${API}/api/projects/${id}/runs/${run}/data`,
