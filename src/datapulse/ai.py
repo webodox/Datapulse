@@ -1,4 +1,4 @@
-"""Claude-powered features: issue explanations, rule suggestions, and plain-English rule drafting.
+"""Claude-powered features: issue explanations, check overviews, rule suggestions, and plain-English rule drafting.
 
 Privacy: only aggregate statistics, column names and detected-issue metrics are sent. Raw rows, category
 values and example values never are (tests enforce this). The triage agent lives in `agent.py`.
@@ -50,6 +50,20 @@ EXPLAIN_SCHEMA = {
         "type": "object", "additionalProperties": False, "required": ["index", "text"],
         "properties": {"index": {"type": "integer"}, "text": {"type": "string"}}}}},
 }
+OVERVIEW_SYSTEM = (
+    "You are a data engineer summarising a data-quality check for a busy teammate. You receive aggregate "
+    "statistics and detected issues, grouped by rule (never raw rows). Write `summary`: two or three plain-English "
+    "sentences on what is going on overall, naming the main pattern rather than listing issues, and whether it "
+    "looks like one root cause or several. Then `focus`: at most three things to look at first, worst first, each "
+    "a short title and one sentence on why. Hedge: these are hypotheses from statistics, not facts."
+)
+OVERVIEW_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["summary", "focus"],
+    "properties": {"summary": {"type": "string"}, "focus": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False, "required": ["title", "detail"],
+        "properties": {"title": {"type": "string"}, "detail": {"type": "string"}}}}},
+}
+OVERVIEW_MAX_ISSUES = 40
 RULES_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["config_yaml", "summary", "not_supported"],
     "properties": {"config_yaml": {"type": "string"}, "summary": {"type": "string"},
@@ -161,6 +175,42 @@ def explain_issues(report: CheckReport, cfg: Config) -> str:
     except (DataPulseError, ValueError, KeyError, TypeError) as e:
         return f"AI explanations unavailable ({e}); using deterministic explanations."
     return "AI explanations added (generated from aggregate statistics only; unverified)."
+
+
+SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
+
+
+def build_overview_payload(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """A stored report reduced to issue counts per rule and the worst issues' metrics; no examples or values."""
+    issues = sorted(doc.get("issues", []), key=lambda i: SEVERITY_RANK.get(i["severity"], 3))
+    groups: Dict[tuple, Dict[str, Any]] = {}
+    for issue in issues:
+        group = groups.setdefault((issue["check"], issue["severity"]),
+                                  {"check": issue["check"], "severity": issue["severity"], "count": 0, "columns": {}})
+        group["count"] += 1
+        for column in issue["columns"]:
+            group["columns"][column] = group["columns"].get(column, 0) + 1
+    for group in groups.values():
+        group["columns"] = sorted(group["columns"], key=group["columns"].get, reverse=True)[:15]
+    return {
+        "dataset": {"baseline_rows": doc["rows"]["baseline"], "current_rows": doc["rows"]["current"]},
+        "issue_count": len(issues),
+        "groups": list(groups.values()),
+        "worst_issues": [{"check": i["check"], "severity": i["severity"], "columns": i["columns"],
+                          "measured": safe_measured(i.get("measured") or {})} for i in issues[:OVERVIEW_MAX_ISSUES]],
+    }
+
+
+def summarize_run(doc: Dict[str, Any], cfg: Config, client=None) -> Dict[str, Any]:
+    """A short AI overview of a stored check report: {summary, focus: [{title, detail}], model}."""
+    response = create(client or get_client(cfg), cfg, system=OVERVIEW_SYSTEM, output_config=json_format(OVERVIEW_SCHEMA),
+                      messages=[{"role": "user", "content": json.dumps(build_overview_payload(doc))}])
+    try:
+        data = json.loads(text_of(response))
+        focus = [{"title": str(f["title"]).strip(), "detail": str(f["detail"]).strip()} for f in data["focus"][:3]]
+        return {"summary": str(data["summary"]).strip(), "focus": focus, "model": cfg.ai.model}
+    except (ValueError, KeyError, TypeError) as e:
+        raise DataPulseError(f"The AI overview came back malformed ({e})")
 
 
 def suggest_with_ai(profile: Dict[str, Any], cfg: Config) -> str:

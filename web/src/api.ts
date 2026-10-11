@@ -14,11 +14,12 @@ export type Report = {
   status: 'passed' | 'failed'; issues: Issue[]; rows: { baseline: number; current: number }
   passed_checks: string[]; affected_consumers: string[]; schema_changed: boolean; data_file: string
   ai_note?: string | null; markdown?: string; triage?: Triage | null; counts?: Record<Severity, number>
-  charts?: Record<string, ColumnChart>; fix?: Fix | null
+  charts?: Record<string, ColumnChart>; fix?: Fix | null; overview?: Overview | null
   source?: { id: string; name: string; kind: string; type?: string; rows_pulled: number; mapped: boolean; steps: string[]; problems: string[] }
   unified?: { sources: Array<{ name: string; kind: string; type?: string; rows: number; error: string | null; problems: string[] }> }
   delivered?: Delivery[]
 }
+export type Overview = { summary: string; focus: Array<{ title: string; detail: string }>; model?: string; at?: string }
 export type ColumnChart = {
   null_rate: [number, number | null]
   hist?: { edges: number[]; baseline: number[]; current: number[] }
@@ -112,6 +113,7 @@ export const api = {
   addUser: (u: { name: string; email: string; password: string; role: User['role'] }) => request<User>('POST', '/api/users', u),
   removeUser: (id: string) => request('DELETE', `/api/users/${id}`),
   investigate: (id: string, run: string) => request<Investigation>('POST', `/api/projects/${id}/runs/${run}/investigate`),
+  overview: (id: string, run: string) => request<Overview>('POST', `/api/projects/${id}/runs/${run}/overview`),
   runDataUrl: (id: string, run: string) => `${API}/api/projects/${id}/runs/${run}/data`,
   sourceCatalog: () => request<SourceKind[]>('GET', '/api/sources/catalog'),
   sourceSample: (id: string, kind: string) =>

@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from datapulse import __version__
 from datapulse.agent import TriageContext, run_triage
-from datapulse.ai import draft_rules, get_api_key
+from datapulse.ai import draft_rules, get_api_key, summarize_run
 from datapulse.config import STARTER_CONFIG, Config
 from datapulse.errors import DataPulseError
 from datapulse.fix import RepairSession, run_repair
@@ -337,8 +337,25 @@ def investigate_run(project_id: str, run_id: str, request: Request) -> dict:
     if todo and len(errors) == len(todo):
         detail = "; ".join(dict.fromkeys(errors.values()))
         raise HTTPException(503 if "environment variable" in detail else 502, detail)
-    _save_report(run_id, doc)
+    # The agents take a minute; merge into the stored report so an overview saved meanwhile isn't lost.
+    latest = json.loads(_run_row(project_id, run_id)["report_json"])
+    latest.update({name: doc[name] for name in AGENTS if doc.get(name)})
+    _save_report(run_id, latest)
     return {"triage": doc.get("triage"), "fix": doc.get("fix"), "errors": errors}
+
+
+@app.post("/api/projects/{project_id}/runs/{run_id}/overview")
+def overview_run(project_id: str, run_id: str) -> dict:
+    """A short AI overview of a failed run: what's going on and what to look at first. Saved with the run."""
+    project = project_row(project_id)
+    _, doc = _failed_run(project_id, run_id)
+    if doc.get("overview"):
+        return doc["overview"]
+    overview = {**ai_call(lambda: summarize_run(doc, project_config(project["config_yaml"]))), "at": now_iso()}
+    latest = json.loads(_run_row(project_id, run_id)["report_json"])
+    latest["overview"] = overview
+    _save_report(run_id, latest)
+    return overview
 
 
 @app.post("/api/projects/{project_id}/runs/{run_id}/triage")

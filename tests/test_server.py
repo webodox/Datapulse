@@ -182,6 +182,30 @@ def test_ml_drift_runs_automatically_and_triage_is_saved_with_the_run(client, mo
     assert "[]" in fake.calls[1]["messages"][-1]["content"][0]["content"]  # history: no earlier runs
 
 
+def test_overview_is_generated_once_and_saved_with_the_run(client, project, monkeypatch):
+    from fake_claude import FakeClaude, text
+    pid = project["id"]
+    df = make_df()
+    client.post(f"/api/projects/{pid}/baseline", files={"file": ("o.csv", _csv(df), "text/csv")})
+    clean = client.post(f"/api/projects/{pid}/runs", files={"file": ("o.csv", _csv(df), "text/csv")}).json()
+    assert client.post(f"/api/projects/{pid}/runs/{clean['run_id']}/overview").status_code == 409
+    bad = df.copy()
+    bad.loc[:49, "customer_id"] = None
+    run_id = client.post(f"/api/projects/{pid}/runs", files={"file": ("o.csv", _csv(bad), "text/csv")}).json()["run_id"]
+    url = f"/api/projects/{pid}/runs/{run_id}/overview"
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert client.post(url).status_code == 503
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    fake = FakeClaude([text(json.dumps({"summary": "Customer ids went missing.", "focus": []}))])
+    monkeypatch.setattr("datapulse.ai.get_client", lambda cfg: fake)
+    assert client.post(url).json()["summary"] == "Customer ids went missing."
+    assert client.post(url).json()["summary"] == "Customer ids went missing."  # cached: no second AI call
+    assert len(fake.calls) == 1
+    assert client.get(f"/api/projects/{pid}/runs/{run_id}").json()["overview"]["summary"] == "Customer ids went missing."
+
+
 def test_draft_rules_endpoint_validates_the_draft(client, project, monkeypatch):
     from fake_claude import FakeClaude, text
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")

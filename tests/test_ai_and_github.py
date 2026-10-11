@@ -57,6 +57,29 @@ def test_ai_failure_falls_back_gracefully(baseline, cfg, df, monkeypatch):
     assert all(i.ai_explanation is None for i in report.issues)
 
 
+def test_overview_payload_groups_issues_and_sends_no_values(baseline, cfg, df):
+    from datapulse.report import render_json
+    doc = json.loads(render_json(report_with_secret(baseline, cfg, df)))
+    payload = ai.build_overview_payload(doc)
+    assert payload["issue_count"] == len(doc["issues"])
+    assert sum(g["count"] for g in payload["groups"]) == len(doc["issues"])
+    assert payload["worst_issues"][0]["severity"] == "critical"
+    sent = json.dumps(payload)
+    assert "ZZ-SECRET" not in sent and "C0001" not in sent and '"examples"' not in sent
+
+
+def test_overview_is_summarised_and_trimmed(baseline, cfg, df, monkeypatch):
+    from datapulse.report import render_json
+    doc = json.loads(render_json(report_with_secret(baseline, cfg, df)))
+    reply = {"summary": " Mostly one problem. ", "focus": [{"title": f"t{n}", "detail": "d"} for n in range(5)]}
+    fake = FakeClaude([text(json.dumps(reply))])
+    overview = ai.summarize_run(doc, cfg, client=fake)
+    assert overview["summary"] == "Mostly one problem." and [f["title"] for f in overview["focus"]] == ["t0", "t1", "t2"]
+    assert SECRET not in fake.sent()
+    with pytest.raises(DataPulseError, match="malformed"):
+        ai.summarize_run(doc, cfg, client=FakeClaude([text("not json")]))
+
+
 def test_pr_comment_is_created_then_updated(monkeypatch):
     calls = []
     store = []

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, API_ORIGIN, fmtDate, plural, runTone, timeAgo, SEVERITIES, TONE_LABEL,
-  type Issue, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft, type ReviewStatus, type ColumnChart } from './api'
+  type Issue, type Overview, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft, type ReviewStatus, type ColumnChart } from './api'
 import type { Route } from './App'
 import { BeforeAfter, NullRates } from './charts'
 import { ruleName } from './flow'
@@ -116,6 +116,12 @@ function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectI
   const notify = useNotify()
   const { report } = run
   const tone = runTone(run)
+  const [rule, setRule] = useState('')
+  const [query, setQuery] = useState('')
+  const narrow = (next: { rule?: string; query?: string }) => {
+    setRule(next.rule ?? ''); setQuery(next.query ?? '')
+    document.getElementById('issues')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   return <section className="card report">
     <div className={`verdict ${tone}`}>
@@ -128,12 +134,14 @@ function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectI
         <Icon name="copy" size={14} /> Copy report</button>}
     </div>
 
+    {report.issues.length > 0 && <OverviewCard run={run} projectId={projectId} ai={ai} changed={changed} narrow={narrow} />}
     {report.issues.length > 0 && <ReviewBar run={run} projectId={projectId} changed={changed} />}
     {report.source && <SourceNote projectId={projectId} run={run} />}
     {report.unified && <UnifiedNote projectId={projectId} run={run} changed={changed} />}
     {report.issues.length > 0 && <InvestigateSection run={run} projectId={projectId} ai={ai} changed={changed} select={select} />}
 
-    {report.issues.length > 0 && <IssueList issues={report.issues} charts={report.charts} />}
+    {report.issues.length > 0 && <IssueList issues={report.issues} charts={report.charts}
+      rule={rule} setRule={setRule} query={query} setQuery={setQuery} />}
     {report.ai_note && <p className="note"><Icon name="sparkle" size={13} /> {report.ai_note}</p>}
     {report.passed_checks.length > 0 && <p className="passed"><Icon name="check" size={14} /> Passed: {report.passed_checks.map(ruleName).join(', ')}</p>}
   </section>
@@ -143,37 +151,86 @@ const PAGE = 25
 const RANK: Record<Severity, number> = { critical: 0, warning: 1, info: 2 }
 
 /** Every issue as one line, worst first; filter, search and page through them, and open one at a time. */
-function IssueList({ issues, charts }: { issues: Issue[]; charts?: Record<string, ColumnChart> }) {
+/** How many issues fall under each key (a rule, or each of an issue's columns), most first. */
+function tally(issues: Issue[], keys: (issue: Issue) => string[]) {
+  const counts = new Map<string, number>()
+  issues.forEach(i => keys(i).forEach(k => counts.set(k, (counts.get(k) || 0) + 1)))
+  return [...counts].sort((a, b) => b[1] - a[1])
+}
+
+const overviewRequests = new Map<string, Promise<Overview>>() // one request per run, even when effects run twice
+
+/** What's going on at a glance: an AI summary (written once per run) over counts by rule and column. */
+function OverviewCard({ run, projectId, ai, changed, narrow }:
+  { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; narrow: (f: { rule?: string; query?: string }) => void }) {
+  const { issues } = run.report
+  const [overview, setOverview] = useState(run.report.overview || null)
+  const [error, setError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
+  useEffect(() => {
+    if (overview || !ai) return
+    let live = true
+    const key = `${run.id}:${attempt}`
+    if (!overviewRequests.has(key)) overviewRequests.set(key, api.overview(projectId, run.id))
+    overviewRequests.get(key)!.then(o => { if (live) { setOverview(o); changed() } }, e => { if (live) setError((e as Error).message) })
+    return () => { live = false }
+  }, [run.id, projectId, ai, attempt, overview])
+
+  const rules = tally(issues, i => [i.check])
+  const columns = tally(issues, i => i.columns)
+  const critical = issues.filter(i => i.severity === 'critical').length
+  const glance = `${plural(issues.length, 'issue')}${critical ? `, ${critical} critical` : ''}. Mostly ${ruleName(rules[0][0])} (${rules[0][1]})`
+    + (rules[1] ? ` and ${ruleName(rules[1][0])} (${rules[1][1]})` : '') + (columns.length ? `, mainly in ${columns.slice(0, 3).map(([c]) => c).join(', ')}.` : '.')
+
+  return <section className="overview" aria-label="Overview">
+    <header>
+      <span className="overview-icon"><Icon name="sparkle" size={15} /></span>
+      <b>Overview</b>
+      {overview && <small className="muted">AI summary from statistics only; check before acting</small>}
+    </header>
+    {overview ? <p className="overview-summary">{overview.summary}</p>
+      : ai && !error ? <p className="muted"><Spinner text="Writing a summary…" /></p>
+      : <p className="overview-summary">{glance}</p>}
+    {error && <p className="muted small">AI summary unavailable: {error}{' '}
+      <button className="link" onClick={() => { setError(null); setAttempt(a => a + 1) }}>Try again</button></p>}
+    {overview && overview.focus.length > 0 && <ol className="overview-focus">{overview.focus.map((f, i) =>
+      <li key={i}><b>{f.title}</b><span>{f.detail}</span></li>)}</ol>}
+    {issues.length > 3 && <div className="overview-facts">
+      <div><small>By rule</small>{rules.slice(0, 5).map(([r, n]) =>
+        <button key={r} className="chip-btn" onClick={() => narrow({ rule: r })}>{ruleName(r)} <b>{n}</b></button>)}</div>
+      {columns.length > 1 && <div><small>Most affected columns</small>{columns.slice(0, 5).map(([c, n]) =>
+        <button key={c} className="chip-btn" onClick={() => narrow({ query: c })}><code>{c}</code> <b>{n}</b></button>)}</div>}
+    </div>}
+  </section>
+}
+
+function IssueList({ issues, charts, rule, setRule, query, setQuery }: { issues: Issue[]; charts?: Record<string, ColumnChart>
+  rule: string; setRule: (r: string) => void; query: string; setQuery: (q: string) => void }) {
   const [severity, setSeverity] = useState<Severity | null>(null)
-  const [rule, setRule] = useState('')
-  const [query, setQuery] = useState('')
   const [limit, setLimit] = useState(PAGE)
   const [opened, setOpened] = useState<number | null>(null)
+  useEffect(() => { setLimit(PAGE); setOpened(null) }, [rule, query])
   const sorted = useMemo(() => issues.map((issue, i) => ({ issue, i })).sort((a, b) => RANK[a.issue.severity] - RANK[b.issue.severity]), [issues])
   const counts = SEVERITIES.map(s => [s, issues.filter(i => i.severity === s).length] as const).filter(([, n]) => n)
-  const rules = useMemo(() => {
-    const byRule = new Map<string, number>()
-    issues.forEach(i => byRule.set(i.check, (byRule.get(i.check) || 0) + 1))
-    return [...byRule].sort((a, b) => b[1] - a[1])
-  }, [issues])
+  const rules = useMemo(() => tally(issues, i => [i.check]), [issues])
   const q = query.trim().toLowerCase()
   const matches = sorted.filter(({ issue }) => (!severity || issue.severity === severity) && (!rule || issue.check === rule)
     && (!q || `${issue.title} ${issue.columns.join(' ')} ${issue.measured_summary}`.toLowerCase().includes(q)))
   const refine = (change: () => void) => { change(); setLimit(PAGE); setOpened(null) }
 
-  return <section className="issue-list" aria-label="Issues">
+  return <section className="issue-list" id="issues" aria-label="Issues">
     <div className="issues-toolbar">
       <div className="filters">
         <button className={!severity ? 'on' : ''} onClick={() => refine(() => setSeverity(null))}>All {issues.length}</button>
         {counts.length > 1 && counts.map(([s, n]) => <button key={s} className={`${s} ${severity === s ? 'on' : ''}`} onClick={() => refine(() => setSeverity(s))}>
           <Icon name={SEVERITY_ICON[s]} size={13} /> {n} {s}</button>)}
       </div>
-      {(rules.length > 1 || issues.length > 10) && <div className="issue-find">
+      {(rules.length > 1 || issues.length > 3) && <div className="issue-find">
         {rules.length > 1 && <select className="search" value={rule} onChange={e => refine(() => setRule(e.target.value))} aria-label="Filter by rule">
           <option value="">All rules</option>
           {rules.map(([r, n]) => <option key={r} value={r}>{ruleName(r)} ({n})</option>)}
         </select>}
-        {issues.length > 10 && <input className="search" value={query} onChange={e => refine(() => setQuery(e.target.value))}
+        {issues.length > 3 && <input className="search" value={query} onChange={e => refine(() => setQuery(e.target.value))}
           placeholder="Search issues or columns…" aria-label="Search issues" />}
       </div>}
     </div>
