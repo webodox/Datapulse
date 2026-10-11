@@ -142,32 +142,57 @@ function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectI
         <Icon name={SEVERITY_ICON[s]} size={13} /> {n} {s}</button>)}
     </div>}
 
-    {shown.map((issue, i) => <IssueCard key={`${issue.check}-${issue.columns}-${i}`} issue={issue} charts={report.charts} />)}
+    <IssueList key={filter || 'all'} issues={shown} charts={report.charts} />
     {report.ai_note && <p className="note"><Icon name="sparkle" size={13} /> {report.ai_note}</p>}
     {report.passed_checks.length > 0 && <p className="passed"><Icon name="check" size={14} /> Passed: {report.passed_checks.map(c => c.replace('_', ' ')).join(', ')}</p>}
   </section>
 }
 
-function IssueCard({ issue, charts }: { issue: Issue; charts?: Record<string, ColumnChart> }) {
+const FIRST_ISSUES = 5
+
+/** Issues as one-line rows that open on click; long lists show the first few with "Show all". */
+function IssueList({ issues, charts }: { issues: Issue[]; charts?: Record<string, ColumnChart> }) {
+  const [all, setAll] = useState(false)
+  const [open, setOpen] = useState<Set<number>>(() => new Set(issues.length === 1 ? [0] : []))
+  const visible = all ? issues : issues.slice(0, FIRST_ISSUES)
+  const toggle = (i: number) => setOpen(o => { const n = new Set(o); if (n.has(i)) n.delete(i); else n.add(i); return n })
+  const allOpen = visible.length > 0 && visible.every((_, i) => open.has(i))
+  return <div className="issue-list">
+    {issues.length > 1 && <div className="issue-list-head">
+      <small className="muted">{plural(issues.length, 'issue')} · click one to see the details</small>
+      <button className="button ghost small-btn" onClick={() => setOpen(allOpen ? new Set() : new Set(visible.map((_, i) => i)))}>
+        {allOpen ? 'Collapse all' : 'Expand all'}</button>
+    </div>}
+    {visible.map((issue, i) => <IssueCard key={`${issue.check}-${issue.columns}-${i}`} issue={issue} charts={charts}
+      open={open.has(i)} toggle={() => toggle(i)} />)}
+    {issues.length > FIRST_ISSUES && <button className="button outline full" onClick={() => setAll(a => !a)}>
+      {all ? 'Show fewer' : `Show all ${issues.length} issues (${issues.length - FIRST_ISSUES} more)`}</button>}
+  </div>
+}
+
+function IssueCard({ issue, charts, open, toggle }: { issue: Issue; charts?: Record<string, ColumnChart>; open: boolean; toggle: () => void }) {
   const measured = Object.entries(issue.measured || {})
-  return <article className={`issue ${issue.severity}`}>
-    <header>
+  return <article className={`issue ${issue.severity} ${open ? 'open' : 'closed'}`}>
+    <button className="issue-row" onClick={toggle} aria-expanded={open}>
       <span className={`pill ${issue.severity}`}><Icon name={SEVERITY_ICON[issue.severity]} size={12} /> {issue.severity}</span>
-      <h3>{issue.title}</h3>
-    </header>
-    <p>{issue.measured_summary}</p>
-    {issue.check === 'ml_drift' && <DriftBars issue={issue} />}
-    <IssueChart issue={issue} charts={charts} />
-    <p className="cause"><b>Possible cause</b> {issue.suggested_explanation}</p>
-    {issue.ai_explanation && <p className="cause ai"><b><Icon name="sparkle" size={12} /> AI suggestion</b> {issue.ai_explanation}</p>}
-    {issue.consumers.length > 0 && <p className="affects"><b>May affect</b>{issue.consumers.map(c =>
-      <span key={c.name} className="chip" title={c.dataset_wide ? 'Reads this dataset' : `Uses ${c.columns.join(', ')}`}>{c.name}</span>)}</p>}
-    {(measured.length > 0 || issue.examples.length > 0) && <details>
-      <summary>Details</summary>
-      <dl>{measured.map(([k, v]) => <div key={k}><dt>{k.replace(/_/g, ' ')}</dt><dd>{fmtValue(v)}</dd></div>)}</dl>
-      {issue.examples.length > 0 && <p className="examples">Examples: {issue.examples.join(' · ')}</p>}
-      <small className="muted">Check: <code>{issue.check}</code></small>
-    </details>}
+      <span className="issue-title"><b>{issue.title}</b>{!open && <small>{issue.measured_summary}</small>}</span>
+      <span className="chevron" aria-hidden="true">{open ? '▴' : '▾'}</span>
+    </button>
+    {open && <>
+      <p>{issue.measured_summary}</p>
+      {issue.check === 'ml_drift' && <DriftBars issue={issue} />}
+      <IssueChart issue={issue} charts={charts} />
+      <p className="cause"><b>Possible cause</b> {issue.suggested_explanation}</p>
+      {issue.ai_explanation && <p className="cause ai"><b><Icon name="sparkle" size={12} /> AI suggestion</b> {issue.ai_explanation}</p>}
+      {issue.consumers.length > 0 && <p className="affects"><b>May affect</b>{issue.consumers.map(c =>
+        <span key={c.name} className="chip" title={c.dataset_wide ? 'Reads this dataset' : `Uses ${c.columns.join(', ')}`}>{c.name}</span>)}</p>}
+      {(measured.length > 0 || issue.examples.length > 0) && <details>
+        <summary>Details</summary>
+        <dl>{measured.map(([k, v]) => <div key={k}><dt>{k.replace(/_/g, ' ')}</dt><dd>{fmtValue(v)}</dd></div>)}</dl>
+        {issue.examples.length > 0 && <p className="examples">Examples: {issue.examples.join(' · ')}</p>}
+        <small className="muted">Check: <code>{issue.check}</code></small>
+      </details>}
+    </>}
   </article>
 }
 
