@@ -545,3 +545,4 @@ small.hl { color: var(--warn-text); font-weight: 600; display: inline-flex; gap:
 .deliveries li.ok { color: var(--good-text) } .deliveries li.held { color: var(--warn-text) } .deliveries li.bad { color: var(--crit-text) }
 .deliveries span { color: var(--ink-2) }
 @media (max-width: 520px) { .mode-pick { grid-template-columns: 1fr } }
+.quick-check .card-head p { margin: 4px 0 0 }

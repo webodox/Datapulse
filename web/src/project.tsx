@@ -9,7 +9,7 @@ import { CodeBlock, copyText, Dropzone, Empty, Spinner, useAction, useNotify } f
 
 export const TABS = ['sources', 'checks', 'baseline', 'rules', 'api'] as const
 export type Tab = typeof TABS[number]
-const TAB_LABEL: Record<Tab, string> = { sources: 'Sources', checks: 'Checks', baseline: 'Standard', rules: 'Rules', api: 'Send data' }
+const TAB_LABEL: Record<Tab, string> = { sources: 'Sources', checks: 'Results', baseline: 'Standard', rules: 'Rules', api: 'Send data' }
 const SEVERITY_ICON: Record<Severity, IconName> = { critical: 'alert', warning: 'flag', info: 'info' }
 const FAIL_ON: Record<string, string> = {
   critical: 'Fails on critical issues', warning: 'Fails on warnings or worse', info: 'Fails on any issue', never: 'Never fails',
@@ -79,39 +79,18 @@ export function ProjectView({ route, go, onChanged, apiKey, dismissKey, ai }: Pr
 
 /* ---------- checks ---------- */
 
+/** Results: every check (uploads, pulls, unifies) with its report and the AI investigation. Data comes in on Sources. */
 function ChecksTab({ detail, runId, select, changed, ai }: { detail: ProjectDetail; runId?: string; select: (id?: string) => void; changed: () => Promise<unknown>; ai: boolean }) {
-  const notify = useNotify()
-  const [busy, run] = useAction()
-  const [useAi, setUseAi] = useState(false)
-
-  if (!detail.has_baseline) return <div className="card setup">
-    <h2>Set the standard format first</h2>
-    <p className="muted">Usually you <a href={`#/p/${detail.id}/sources`}>connect a source</a> and use it as the standard.
-      You can also upload a file you trust: DataPulse learns its columns, types and value ranges, and converts and checks everything against it.</p>
-    <Dropzone title="Drop your known-good data file" hint="CSV, JSON, JSONL or Parquet · up to 25 MB" busy={busy && 'Profiling your data…'}
-      onFile={f => run('baseline', async () => { await api.upload(detail.id, 'baseline', f); await changed(); notify.ok('Standard saved. Now connect sources or upload a new version to check it.') })} />
-  </div>
-
   const viewed = detail.runs.find(r => r.id === runId) || detail.runs[0]
-  const check = (file: File) => run('check', async () => {
-    const report = await api.upload(detail.id, 'runs', file, useAi)
-    await changed()
-    select(report.run_id)
-    notify.ok(report.status === 'failed' ? `Check failed: ${plural(report.issues.length, 'issue')} to review` : 'Check passed')
-  })
-
-  return <>
-    <div className="card">
-      <Dropzone title="Drop a new version of the data to check it" hint={`Compared against baseline v${detail.baseline?.baseline_version} · CSV, JSON, JSONL or Parquet`}
-        busy={busy && 'Checking your data…'} onFile={check} />
-      <label className="toggle"><input type="checkbox" checked={useAi} onChange={e => setUseAi(e.target.checked)} />
-        Add AI explanations to each issue</label>
-    </div>
-    {viewed ? <div className="checks-layout">
-      <RunHistory runs={detail.runs} selected={viewed.id} select={select} />
-      <RunReport key={viewed.id} run={viewed} projectId={detail.id} ai={ai} changed={changed} select={select} />
-    </div> : <Empty icon="activity" title="No checks yet"><span>Drop a file above. Results and history appear here.</span></Empty>}
-  </>
+  if (!viewed) return <Empty icon="activity" title="No results yet">
+    <span>{detail.has_baseline ? 'Pull a source, unify your sources, or quick-check a file. Every result appears here.'
+      : 'Start on Sources: connect your data and pick the standard format.'}</span>
+    <a className="button primary" href={`#/p/${detail.id}/sources`}>Go to Sources</a>
+  </Empty>
+  return <div className="checks-layout">
+    <RunHistory runs={detail.runs} selected={viewed.id} select={select} />
+    <RunReport key={viewed.id} run={viewed} projectId={detail.id} ai={ai} changed={changed} select={select} />
+  </div>
 }
 
 function RunHistory({ runs, selected, select }: { runs: Run[]; selected: string; select: (id: string) => void }) {
@@ -461,7 +440,7 @@ function ApiTab({ detail, apiKey }: { detail: ProjectDetail; apiKey?: string }) 
     <CodeBlock code={curl} label="Copy command" />
     <ul>
       <li><code>"role": "baseline"</code> replaces the baseline; <code>"candidate"</code> (the default) runs a check.</li>
-      <li>Up to 50,000 rows per request. For bigger files, upload them on the Checks tab or use the CLI / GitHub Action.</li>
+      <li>Up to 50,000 rows per request. For bigger files, use Quick check on the Sources tab, or the CLI / GitHub Action.</li>
       <li>The API key was shown once, when the project was created. Only its hash is stored.</li>
     </ul>
     <a className="link" href={`${API_ORIGIN}/docs`} target="_blank" rel="noreferrer">Interactive API docs <Icon name="external" size={13} /></a>
