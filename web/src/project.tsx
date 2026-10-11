@@ -5,7 +5,7 @@ import type { Route } from './App'
 import { BeforeAfter, NullRates } from './charts'
 import { SourceNote, SourcesTab, UnifiedNote } from './sources'
 import { Icon, type IconName } from './icons'
-import { CodeBlock, copyText, Dropzone, Empty, Spinner, useAction, useNotify } from './ui'
+import { CodeBlock, copyText, Dropzone, Empty, Menu, Spinner, useAction, useNotify } from './ui'
 
 export const TABS = ['sources', 'checks', 'baseline', 'rules', 'api'] as const
 export type Tab = typeof TABS[number]
@@ -49,10 +49,9 @@ export function ProjectView({ route, go, onChanged, apiKey, dismissKey, ai }: Pr
           {!detail.has_baseline ? <><i className="dot" /> Waiting for a standard: pick a source on the Sources tab</>
             : latest ? <><i className={`dot ${latest.status}`} /> {TONE_LABEL[runTone(latest)]} · last checked {timeAgo(latest.created_at)}</>
             : <><i className="dot" /> Ready for its first check</>}
-          <span className="sep">·</span>{FAIL_ON[detail.fail_on]}
         </p>
       </div>
-      <button className="button ghost danger" onClick={remove}><Icon name="trash" size={15} /> Delete</button>
+      <Menu label="Project actions" items={[{ label: 'Delete project', onClick: remove, danger: true }]} />
     </header>
 
     {apiKey && <div className="banner">
@@ -199,10 +198,7 @@ function IssueCard({ issue, charts, open, onToggle }: { issue: Issue; charts?: R
         <span className={`pill ${issue.severity}`}><Icon name={SEVERITY_ICON[issue.severity]} size={12} /> {issue.severity}</span>
         <h3>{issue.title}</h3>
       </div>
-      <div className="issue-toggle-btn" aria-hidden="true">
-        <span className="issue-toggle-text">{isExpanded ? 'Hide message' : 'View message'}</span>
-        <Icon name="chevronDown" size={14} className={`issue-chevron ${isExpanded ? 'open' : ''}`} />
-      </div>
+      <Icon name="chevronDown" size={16} className={`issue-chevron ${isExpanded ? 'open' : ''}`} />
     </header>
 
     {isExpanded && <div className="issue-body">
@@ -476,7 +472,7 @@ function RulesTab({ detail, draft, setDraft, dirty, changed, ai }:
       </div>}
       <div className="card-head">
         <h2>datapulse.yml</h2>
-        <span className="muted">{dirty ? 'Unsaved changes' : 'Saved'}</span>
+        <span className="muted">{FAIL_ON[detail.fail_on]} · {dirty ? 'Unsaved changes' : 'Saved'}</span>
       </div>
       <textarea className="editor" value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} aria-label="Rules (YAML)"
         onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (dirty) save() } }} />

@@ -78,6 +78,32 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   </div>
 }
 
+export type MenuItem = { label: string; onClick: () => void; danger?: boolean; disabled?: boolean }
+
+/** A "⋯" button that opens a short list of secondary actions. */
+export function Menu({ label, items }: { label: string; items: Array<MenuItem | false | null | undefined> }) {
+  const [open, setOpen] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false) }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey) }
+  }, [open])
+  const shown = items.filter((i): i is MenuItem => !!i)
+  return <div className="menu" ref={root}>
+    <button type="button" className="icon-btn" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+      <Icon name="more" size={18} />
+    </button>
+    {open && <div className="menu-list" role="menu">
+      {shown.map(i => <button key={i.label} type="button" role="menuitem" className={i.danger ? 'danger' : ''} disabled={i.disabled}
+        onClick={() => { setOpen(false); i.onClick() }}>{i.label}</button>)}
+    </div>}
+  </div>
+}
+
 const ACCEPT = '.csv,.json,.jsonl,.ndjson,.parquet,.pq'
 
 /** Drop or pick a file; the action starts straight away. */

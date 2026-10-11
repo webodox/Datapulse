@@ -22,6 +22,7 @@ const PATHS: Record<string, string> = {
   shield: 'M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z',
   arrow: 'M4 12h15m0 0-5-5m5 5-5 5',
   chevronDown: 'm6 9 6 6 6-6',
+  more: 'M5 11.5a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1Zm7 0a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1Zm7 0a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1Z',
 }
 
 export type IconName = keyof typeof PATHS

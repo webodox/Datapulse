@@ -1,17 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, plural, runTone, timeAgo, type ColumnSide, type ComparedColumn, type Comparison, type ProjectDetail,
-  type Run, type Severity, type Source, type Step, type Tone } from './api'
+  type Source, type Step } from './api'
 import { Icon, type IconName } from './icons'
-import { Spinner } from './ui'
 
 const pct = (p: number | null | undefined) => p == null ? '—' : `${(p * 100).toFixed(p > 0 && p < 0.1 ? 1 : 0)}%`
 const num = (v: number | null | undefined) => v == null ? '—' : Math.abs(v) >= 1000
   ? v.toLocaleString(undefined, { maximumFractionDigits: 0 }) : v.toLocaleString(undefined, { maximumFractionDigits: 2 })
-const countsOf = (run: Run): Record<Severity, number> => run.report.counts ?? {
-  critical: run.report.issues.filter(i => i.severity === 'critical').length,
-  warning: run.report.issues.filter(i => i.severity === 'warning').length,
-  info: run.report.issues.filter(i => i.severity === 'info').length,
-}
 const RULES: Record<string, string> = {
   schema: 'columns & types', row_count: 'row count', null_rate: 'empty values', categorical: 'allowed values',
   duplicates: 'duplicates', distribution: 'value ranges', ml_drift: 'learned drift',
@@ -21,45 +15,12 @@ const ruleName = (check: string) => RULES[check] ?? check.replace(/_/g, ' ')
 /** The most recent check of one source, from the project's recent runs. */
 export const lastCheckOf = (detail: ProjectDetail, source: Source) => detail.runs.find(r => r.report.source?.id === source.id)
 
-/* ---------- health cards ---------- */
-
-export function HealthCards({ detail, sources }: { detail: ProjectDetail; sources: Source[] }) {
-  const unified = detail.runs.find(r => r.report.unified)
-  const latest = detail.runs[0]
-  const recent = detail.runs.slice(0, 10)
-  const passing = recent.filter(r => r.status === 'passed').length
-  const todo = sources.filter(s => s.status === 'needs_mapping').length
-  const failing = sources.filter(s => { const run = lastCheckOf(detail, s); return run && run.status === 'failed' }).length
-  const counts = latest ? countsOf(latest) : null
-  const cards: Array<{ label: string; value: string; note: string; tone: Tone | 'none'; icon: IconName }> = [
-    { label: 'Sources', value: String(sources.length), icon: 'plug',
-      tone: !sources.length ? 'none' : todo || failing ? 'issues' : 'clean',
-      note: !sources.length ? 'None connected yet' : [`${sources.length - todo} mapped`, todo && `${todo} need mapping`, failing && `${failing} failing`].filter(Boolean).join(' · ') },
-    { label: 'Unified table', value: unified ? unified.report.rows.current.toLocaleString() : '—', icon: 'database',
-      tone: unified ? runTone(unified) : 'none',
-      note: unified ? `rows · ${timeAgo(unified.created_at)} · ${unified.issue_count ? plural(unified.issue_count, 'issue') : 'all clear'}` : 'Not unified yet' },
-    { label: 'Checks passing', value: recent.length ? `${passing}/${recent.length}` : '—', icon: 'activity',
-      tone: !recent.length ? 'none' : passing === recent.length ? 'clean' : passing >= recent.length / 2 ? 'issues' : 'failed',
-      note: recent.length ? `of the last ${plural(recent.length, 'check')}` : 'No checks yet' },
-    { label: 'Latest issues', value: counts ? String(counts.critical + counts.warning + counts.info) : '—', icon: 'flag',
-      tone: !latest ? 'none' : runTone(latest),
-      note: counts ? `${counts.critical} critical · ${counts.warning} warning${latest ? ` · ${timeAgo(latest.created_at)}` : ''}` : 'No checks yet' },
-  ]
-  return <div className="health">{cards.map(c => <div key={c.label} className={`card health-card ${c.tone}`}>
-    <span className="health-icon"><Icon name={c.icon} size={16} /></span>
-    <small>{c.label}</small>
-    <b>{c.value}</b>
-    <span className="muted">{c.note}</span>
-  </div>)}</div>
-}
-
 /* ---------- sources → standard → unified flow ---------- */
 
 const LANE = 64, GAP = 10
 
-export function FlowDiagram({ detail, sources, icon, openRun, unify, unifying, canUnify }:
-  { detail: ProjectDetail; sources: Source[]; icon: (kind: string) => IconName; openRun: (run?: string) => void
-    unify: () => void; unifying: boolean; canUnify: boolean }) {
+export function FlowDiagram({ detail, sources, icon, openRun }:
+  { detail: ProjectDetail; sources: Source[]; icon: (kind: string) => IconName; openRun: (run?: string) => void }) {
   const standard = sources.find(s => s.status === 'standard')
   const unified = detail.runs.find(r => r.report.unified)
   const height = Math.max(LANE, sources.length * (LANE + GAP) - GAP)
@@ -74,7 +35,7 @@ export function FlowDiagram({ detail, sources, icon, openRun, unify, unifying, c
   return <section className="card flow" aria-label="How your sources become one table">
     <div className="card-head"><h3>Sources → unified table</h3>
       <small className="muted">Each source is converted to the standard, then combined and checked.</small></div>
-    {!sources.length ? <p className="muted">Add a source to see it here.</p> : <div className="flow-grid">
+    <div className="flow-grid">
       <ol className="flow-lanes" style={{ gap: GAP }}>{sources.map(s => {
         const { run, state, label } = lane(s)
         return <li key={s.id} style={{ height: LANE }}>
@@ -108,10 +69,8 @@ export function FlowDiagram({ detail, sources, icon, openRun, unify, unifying, c
             <a className="button ghost small-btn" href={api.runDataUrl(detail.id, unified.id)}><Icon name="download" size={13} /> Data</a>
           </div>
         </> : <span className="muted">Not unified yet</span>}
-        {detail.has_baseline && <button className="button primary small-btn" disabled={!canUnify || unifying} onClick={unify}>
-          {unifying ? <Spinner text="Unifying…" /> : unified ? 'Unify again' : 'Unify now'}</button>}
       </div>
-    </div>}
+    </div>
   </section>
 }
 

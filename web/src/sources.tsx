@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, plural, runTone, timeAgo, type Destination, type DestinationForm, type Mapping, type ProjectDetail, type Run, type Source, type SourceKind, type Step } from './api'
-import { FlowDiagram, HealthCards, lastCheckOf, MappingCompare } from './flow'
+import { FlowDiagram, lastCheckOf, MappingCompare } from './flow'
 import { Icon, type IconName } from './icons'
-import { Dropzone, Empty, Modal, Spinner, useAction, useNotify } from './ui'
+import { Dropzone, Empty, Menu, Modal, Spinner, useAction, useNotify } from './ui'
 
 const STATUS: Record<Source['status'], { label: string; tone: string }> = {
   standard: { label: 'Standard', tone: 'clean' },
@@ -45,6 +45,7 @@ export function SourcesTab({ detail, changed, ai, openRun }:
   const kinds = useCatalog()
   const [list, setList] = useState<Source[] | null>(null)
   const [editing, setEditing] = useState<Source | 'new' | null>(null)
+  const [quickCheck, setQuickCheck] = useState(false)
   const [busy, act] = useAction()
   const reload = useCallback(() => api.sources(detail.id).then(setList), [detail.id])
   useEffect(() => { reload().catch(notify.fail) }, [reload, notify])
@@ -72,11 +73,13 @@ export function SourcesTab({ detail, changed, ai, openRun }:
   return <>
     <div className="card sources-intro">
       <div>
-        <h2>Unify your data</h2>
-        <ol className="progress">{steps.map(([label, done], i) =>
-          <li key={label} className={done ? 'done' : i === next ? 'next' : ''}><span>{done ? <Icon name="check" size={12} /> : i + 1}</span>{label}</li>)}</ol>
+        <h2>{next === -1 ? 'Sources' : 'Unify your data'}</h2>
+        {next === -1 ? <p className="muted">{plural(list.length, 'source')} · last unified {timeAgo(lastUnified!.created_at)}</p>
+          : <ol className="progress">{steps.map(([label, done], i) =>
+            <li key={label} className={done ? 'done' : i === next ? 'next' : ''}><span>{done ? <Icon name="check" size={12} /> : i + 1}</span>{label}</li>)}</ol>}
       </div>
       <div className="actions">
+        {detail.has_baseline && <button className="button ghost" onClick={() => setQuickCheck(true)}>Quick check a file</button>}
         <button className={`button ${list.length ? 'outline' : 'primary'}`} onClick={() => setEditing('new')}><Icon name="plus" size={14} /> Add source</button>
         {detail.has_baseline && <button className="button primary" disabled={!ready.length || !!busy} onClick={unify}
           title={ready.length ? undefined : 'Map a source first'}>
@@ -85,9 +88,7 @@ export function SourcesTab({ detail, changed, ai, openRun }:
       </div>
     </div>
 
-    <HealthCards detail={detail} sources={list} />
-    {list.length > 0 && <FlowDiagram detail={detail} sources={list} icon={k => KIND_ICON[k] || 'database'} openRun={openRun}
-      unify={unify} unifying={busy === 'unify'} canUnify={ready.length > 0} />}
+    {list.length > 1 && <FlowDiagram detail={detail} sources={list} icon={k => KIND_ICON[k] || 'database'} openRun={openRun} />}
 
     {list.length === 0 ? <Empty icon="plug" title="No sources yet">
       <span>Any database, a file, a link, a REST API, Google Drive or a web page. Use test data to try one without your own credentials.</span>
@@ -96,11 +97,12 @@ export function SourcesTab({ detail, changed, ai, openRun }:
         refresh={refresh} edit={() => setEditing(s)} openRun={openRun} />)}
     </div>}
 
-    {detail.has_baseline && <QuickCheck detail={detail} changed={changed} openRun={openRun} />}
     {detail.has_baseline && <Destinations projectId={detail.id} />}
 
     {editing && <SourceDialog projectId={detail.id} kinds={kinds} source={editing === 'new' ? null : editing}
       close={() => setEditing(null)} saved={() => { setEditing(null); reload() }} />}
+    {quickCheck && <QuickCheck detail={detail} changed={changed} close={() => setQuickCheck(false)}
+      openRun={run => { setQuickCheck(false); openRun(run) }} />}
   </>
 }
 
@@ -123,6 +125,8 @@ function SourceCard({ source: s, kinds, detail, ai, refresh, edit, openRun }:
     if (!window.confirm(`Remove the source "${s.name}"? Past checks are kept.`)) return
     act('remove', async () => { await api.removeSource(detail.id, s.id); await refresh() })
   }
+  const menuBusy = busy === 'remove' ? 'Removing…' : busy === 'baseline' && detail.has_baseline ? 'Making it the standard…'
+    : busy === 'map' && s.status === 'mapped' ? 'Re-mapping…' : null
 
   return <article className="card source" id={`source-${s.id}`}>
     <header>
@@ -146,13 +150,15 @@ function SourceCard({ source: s, kinds, detail, ai, refresh, edit, openRun }:
         : <button className="button primary" disabled={!!busy} onClick={() => pull('candidate')}>
           {busy === 'candidate' ? <Spinner text="Pulling…" /> : 'Pull & check'}</button>}
       {s.last_run_id && <button className="button ghost" onClick={() => openRun(s.last_run_id!)}>Last check</button>}
-      {s.status === 'mapped' && <button className="button ghost" disabled={!!busy} onClick={map}>{busy === 'map' ? <Spinner text="Mapping…" /> : 'Re-map'}</button>}
-      {!s.proposal && detail.has_baseline && s.status !== 'standard' && <button className="button ghost" onClick={() => setComparing(c => !c)}>
-        {comparing ? 'Hide columns' : 'Compare columns'}</button>}
-      {detail.has_baseline && s.status !== 'standard' && <button className="button ghost" disabled={!!busy} onClick={() => pull('baseline')}>Make standard</button>}
+      {menuBusy && <span className="muted"><Spinner text={menuBusy} /></span>}
       <span className="spacer" />
-      <button className="button ghost" onClick={edit}>Edit</button>
-      <button className="button ghost danger" disabled={!!busy} onClick={remove} aria-label={`Remove ${s.name}`}><Icon name="trash" size={14} /></button>
+      <Menu label={`More actions for ${s.name}`} items={[
+        !s.proposal && detail.has_baseline && s.status !== 'standard' && { label: comparing ? 'Hide columns' : 'Compare columns', onClick: () => setComparing(c => !c) },
+        s.status === 'mapped' && { label: 'Re-map', onClick: map, disabled: !!busy },
+        detail.has_baseline && s.status !== 'standard' && { label: 'Make standard', onClick: () => pull('baseline'), disabled: !!busy },
+        { label: 'Edit', onClick: edit },
+        { label: 'Remove', onClick: remove, danger: true, disabled: !!busy },
+      ]} />
     </div>
     {s.status === 'needs_mapping' && !s.proposal && !ai && detail.has_baseline &&
       <small className="muted">AI is off: only columns with matching names will be mapped.</small>}
@@ -333,7 +339,8 @@ export function UnifiedNote({ projectId, run, changed }: { projectId: string; ru
 
 /* ---------- quick check: one file against the standard, without adding it as a source ---------- */
 
-function QuickCheck({ detail, changed, openRun }: { detail: ProjectDetail; changed: () => Promise<unknown>; openRun: (run?: string) => void }) {
+function QuickCheck({ detail, changed, openRun, close }:
+  { detail: ProjectDetail; changed: () => Promise<unknown>; openRun: (run?: string) => void; close: () => void }) {
   const notify = useNotify()
   const [busy, run] = useAction()
   const [useAi, setUseAi] = useState(false)
@@ -343,16 +350,13 @@ function QuickCheck({ detail, changed, openRun }: { detail: ProjectDetail; chang
     openRun(report.run_id)
     notify.ok(report.status === 'failed' ? `Check failed: ${plural(report.issues.length, 'issue')} to review` : 'Check passed')
   })
-  return <section className="card quick-check">
-    <div className="card-head"><div>
-      <h2>Quick check a file</h2>
-      <p className="muted">Check one file against the standard without adding it as a source. The result opens in Results.</p>
-    </div></div>
+  return <Modal title="Quick check a file" onClose={close}>
+    <p className="muted">Check one file against the standard without adding it as a source. The result opens in Results.</p>
     <Dropzone title="Drop a file to check it once" hint={`Compared with standard v${detail.baseline?.baseline_version} · CSV, Excel, JSON or Parquet`}
       busy={busy && 'Checking your data…'} onFile={check} />
     <label className="toggle"><input type="checkbox" checked={useAi} onChange={e => setUseAi(e.target.checked)} />
       Add AI explanations to each issue</label>
-  </section>
+  </Modal>
 }
 
 /* ---------- destinations: send unified data into the company's own database ---------- */
@@ -372,18 +376,20 @@ function Destinations({ projectId }: { projectId: string }) {
   return <section className="card destinations">
     <div className="card-head">
       <div><h2>Send unified data to</h2>
-        <p className="muted">Every time you unify, the result is written into your own database, but only if it passes its checks.</p></div>
+        <p className="muted">{list.length ? 'Each unify that passes its checks is written here.'
+          : 'Optional. Write each unify that passes its checks into your own database. Without one, download the unified table from Results.'}</p></div>
       <button className="button outline" onClick={() => setEditing('new')}><Icon name="plus" size={14} /> Add destination</button>
     </div>
-    {list.length === 0 ? <p className="muted">No destination yet. Unified data can still be downloaded.</p>
-      : <ul className="destination-list">{list.map(d => <li key={d.id}>
+    {list.length > 0 && <ul className="destination-list">{list.map(d => <li key={d.id}>
         <span className="source-icon"><Icon name="database" size={16} /></span>
         <div><b>{d.name}</b>
           <small className="muted">{d.type} · table <code>{d.table}</code> · {d.mode === 'replace' ? 'replaced each time' : 'new rows added each time'}</small>
           {d.last_result && <small className="muted">Last: {d.last_result} · {timeAgo(d.last_sent_at || undefined)}</small>}
         </div>
-        <button className="button ghost" onClick={() => setEditing(d)}>Edit</button>
-        <button className="button ghost danger" disabled={busy === d.id} onClick={() => remove(d)} aria-label={`Remove ${d.name}`}><Icon name="trash" size={14} /></button>
+        <Menu label={`More actions for ${d.name}`} items={[
+          { label: 'Edit', onClick: () => setEditing(d) },
+          { label: 'Remove', onClick: () => remove(d), danger: true, disabled: busy === d.id },
+        ]} />
       </li>)}</ul>}
     {editing && <DestinationDialog projectId={projectId} destination={editing === 'new' ? null : editing}
       close={() => setEditing(null)} saved={() => { setEditing(null); reload() }} />}

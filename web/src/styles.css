@@ -64,6 +64,12 @@ small { font-size: 13px }
 .button.full { width: 100% }
 .icon-btn { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); flex: none }
 .icon-btn:hover { background: var(--surface-3); color: var(--ink) }
+.menu { position: relative; flex: none }
+.menu-list { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 170px; display: grid; padding: 4px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 8px 24px #0002 }
+.menu-list button { text-align: left; border: 0; background: transparent; color: var(--ink); padding: 8px 10px; border-radius: 6px; font: inherit; font-size: 14px; cursor: pointer }
+.menu-list button:hover:not(:disabled) { background: var(--surface-3) }
+.menu-list button:disabled { opacity: .5; cursor: default }
+.menu-list button.danger { color: var(--crit-text) }
 .link { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; text-decoration: none }
 .spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite }
 @keyframes spin { to { transform: rotate(360deg) } }
@@ -189,9 +195,8 @@ em.failed { color: var(--crit-text) } em.issues { color: var(--warn-text) } em.c
 .issue-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px }
 .issue-title-group { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0 }
 .issue-title-group h3 { font-size: 15px; font-weight: 600; color: var(--ink); margin: 0 }
-.issue-toggle-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); padding: 4px 10px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); transition: all .15s ease; flex: none }
-.issue-head:hover .issue-toggle-btn { color: var(--ink); background: var(--surface-3); border-color: var(--border-strong) }
-.issue.expanded .issue-toggle-btn { color: var(--ink); background: var(--surface-3) }
+.issue-head > .issue-chevron { color: var(--muted); flex: none }
+.issue-head:hover > .issue-chevron { color: var(--ink) }
 .issue-chevron { transition: transform .2s ease }
 .issue-chevron.open { transform: rotate(180deg) }
 
@@ -407,6 +412,7 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .sources-intro { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap }
 .sources-intro > div:first-child { flex: 1; min-width: 240px }
 .sources-intro .actions { margin: 0 }
+.sources-intro p { margin: 4px 0 0 }
 .source-list { display: grid; gap: 12px }
 .source { display: grid; gap: 10px }
 .source header { display: flex; align-items: center; gap: 12px }
@@ -466,16 +472,6 @@ em.bad { color: var(--crit-text); font-style: normal }
 .file-pick input { font: 14px var(--font) }
 .detected { display: inline-flex; align-items: center; gap: 5px; color: var(--good-text); font-weight: 600 }
 
-/* ---------- health cards ---------- */
-.health { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px }
-.health-card { margin: 0; display: grid; gap: 2px; border-top: 3px solid var(--border-strong); padding: 14px 16px; position: relative }
-.health-card small { color: var(--muted); font-weight: 600 }
-.health-card b { font-size: 26px; line-height: 1.15; font-variant-numeric: tabular-nums }
-.health-card > span.muted { font-size: 13px }
-.health-card.clean { border-top-color: var(--good) } .health-card.issues { border-top-color: var(--warn) } .health-card.failed { border-top-color: var(--crit) }
-.health-icon { position: absolute; right: 14px; top: 14px; color: var(--muted) }
-.health-card.clean .health-icon { color: var(--good-text) } .health-card.issues .health-icon { color: var(--warn-text) } .health-card.failed .health-icon { color: var(--crit-text) }
-
 /* ---------- sources → unified flow ---------- */
 .flow-grid { display: grid; grid-template-columns: minmax(240px, 1.4fr) minmax(60px, 140px) minmax(210px, 1fr); align-items: center }
 .flow-lanes { list-style: none; margin: 0; padding: 0; display: grid }
@@ -499,7 +495,6 @@ em.bad { color: var(--crit-text); font-style: normal }
 .flow-target b { font-size: 16px }
 .flow-target hr { border: 0; border-top: 1px dashed var(--border-strong); width: 100%; margin: 8px 0 }
 .flow-target .actions { margin: 4px 0 }
-.flow-target > .button { justify-self: start; margin-top: 4px }
 .flow-status.clean { color: var(--good-text) } .flow-status.issues { color: var(--warn-text) } .flow-status.failed { color: var(--crit-text) }
 .flow-status { font-weight: 600 }
 
@@ -545,7 +540,6 @@ small.hl { color: var(--warn-text); font-weight: 600; display: inline-flex; gap:
 .cmp-issues li { display: flex; gap: 8px; align-items: center }
 
 @media (max-width: 1000px) {
-  .health { grid-template-columns: repeat(2, minmax(0, 1fr)) }
   .flow-grid { grid-template-columns: 1fr; gap: 12px }
   .flow-links { display: none }
 }
@@ -565,8 +559,6 @@ small.hl { color: var(--warn-text); font-weight: 600; display: inline-flex; gap:
 .deliveries li.ok { color: var(--good-text) } .deliveries li.held { color: var(--warn-text) } .deliveries li.bad { color: var(--crit-text) }
 .deliveries span { color: var(--ink-2) }
 @media (max-width: 520px) { .mode-pick { grid-template-columns: 1fr } }
-.quick-check .card-head p { margin: 4px 0 0 }
-
 /* ---------- AI investigation: summary on top, sections folded ---------- */
 .fix-summary { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px }
 .fix-summary > b { font-size: 15px }
