@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, API_ORIGIN, fmtDate, plural, runTone, timeAgo, SEVERITIES, TONE_LABEL,
-  type Issue, type Overview, type ProjectDetail, type Run, type Severity, type Triage, type RulesDraft, type ReviewStatus, type ColumnChart } from './api'
+  type Issue, type Overview, type ProjectDetail, type Run, type Severity, type RulesDraft, type ReviewStatus, type ColumnChart } from './api'
 import type { Route } from './App'
 import { BeforeAfter, NullRates } from './charts'
 import { ruleName } from './flow'
@@ -79,7 +79,7 @@ export function ProjectView({ route, go, onChanged, apiKey, dismissKey, ai }: Pr
 
 /* ---------- checks ---------- */
 
-/** Results: every check (uploads, pulls, unifies) with its report and the AI investigation. Data comes in on Sources. */
+/** Results: every check (uploads, pulls, unifies) with its report and AI overview. Data comes in on Sources. */
 function ChecksTab({ detail, runId, select, changed, ai }: { detail: ProjectDetail; runId?: string; select: (id?: string) => void; changed: () => Promise<unknown>; ai: boolean }) {
   const viewed = detail.runs.find(r => r.id === runId) || detail.runs[0]
   if (!viewed) return <Empty icon="activity" title="No results yet">
@@ -89,7 +89,7 @@ function ChecksTab({ detail, runId, select, changed, ai }: { detail: ProjectDeta
   </Empty>
   return <div className="checks-layout">
     <RunHistory runs={detail.runs} selected={viewed.id} select={select} />
-    <RunReport key={viewed.id} run={viewed} projectId={detail.id} ai={ai} changed={changed} select={select} />
+    <RunReport key={viewed.id} run={viewed} projectId={detail.id} ai={ai} changed={changed} />
   </div>
 }
 
@@ -112,7 +112,7 @@ function RunHistory({ runs, selected, select }: { runs: Run[]; selected: string;
   </aside>
 }
 
-function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; select: (id?: string) => void }) {
+function RunReport({ run, projectId, ai, changed }: { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown> }) {
   const notify = useNotify()
   const { report } = run
   const tone = runTone(run)
@@ -138,8 +138,6 @@ function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectI
     {report.issues.length > 0 && <ReviewBar run={run} projectId={projectId} changed={changed} />}
     {report.source && <SourceNote projectId={projectId} run={run} />}
     {report.unified && <UnifiedNote projectId={projectId} run={run} changed={changed} />}
-    {report.issues.length > 0 && <InvestigateSection run={run} projectId={projectId} ai={ai} changed={changed} select={select} />}
-
     {report.issues.length > 0 && <IssueList issues={report.issues} charts={report.charts}
       rule={rule} setRule={setRule} query={query} setQuery={setQuery} />}
     {report.ai_note && <p className="note"><Icon name="sparkle" size={13} /> {report.ai_note}</p>}
@@ -296,121 +294,6 @@ function IssueChart({ issue, charts }: { issue: Issue; charts?: Record<string, C
   if ((issue.check === 'distribution' || issue.check === 'ml_drift') && chart.hist) return <BeforeAfter column={column} chart={chart.hist} />
   if (issue.check === 'null_rate') return <NullRates column={column} rates={chart.null_rate} />
   return null
-}
-
-/* ---------- Investigate with AI: diagnosis + repair in one pass ---------- */
-
-const VERDICT: Record<Triage['verdict'], { label: string; tone: string; icon: IconName }> = {
-  block: { label: 'Block this batch', tone: 'failed', icon: 'alert' },
-  investigate: { label: 'Investigate before shipping', tone: 'issues', icon: 'flag' },
-  safe_to_ship: { label: 'Safe to ship', tone: 'clean', icon: 'check' },
-}
-const PART: Record<string, string> = { triage: 'The diagnosis', fix: 'The repair' }
-
-function InvestigateSection({ run, projectId, ai, changed, select }:
-  { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; select: (id?: string) => void }) {
-  const notify = useNotify()
-  const [busy, act] = useAction()
-  const { triage, fix } = run.report
-  const investigate = () => act('investigate', async () => {
-    const result = await api.investigate(projectId, run.id)
-    await changed()
-    Object.entries(result.errors).forEach(([part, message]) => notify.fail(new Error(`${PART[part]} didn't finish: ${message}`)))
-  })
-  const recheck = () => act('recheck', async () => {
-    const report = await api.checkFixed(projectId, run.id)
-    await changed(); select(report.run_id)
-    notify.ok(`Fixed file checked: ${plural(report.issues.length, 'issue')} left`)
-  })
-  const button = <button className="button primary" disabled={!ai || !!busy} onClick={investigate}>
-    {busy === 'investigate' ? <Spinner text="Investigating…" /> : <><Icon name="sparkle" size={14} /> {triage && !fix ? 'Repair a copy with AI' : fix && !triage ? 'Diagnose with AI' : 'Investigate with AI'}</>}
-  </button>
-
-  if (!triage && !fix) return <div className="triage-cta">
-    <span className="triage-icon"><Icon name="sparkle" size={18} /></span>
-    <div>
-      <b>{busy ? 'Two AI agents are on it…' : 'Investigate with AI'}</b>
-      <small>{busy ? 'One finds the cause while the other repairs a copy. About a minute.'
-        : ai ? 'Finds what went wrong and who it affects, and repairs a copy of the file. Your original is never changed.'
-        : 'AI is off. Set ANTHROPIC_API_KEY on the server to turn it on.'}</small>
-    </div>
-    {button}
-  </div>
-
-  const v = triage && VERDICT[triage.verdict]
-  return <section className="triage">
-    <header>
-      {v ? <span className={`pill verdict ${v.tone}`}><Icon name={v.icon} size={12} /> {v.label}</span>
-        : <span className="pill verdict clean"><Icon name="wrench" size={12} /> Repaired copy</span>}
-      <small className="muted"><Icon name="sparkle" size={12} /> AI investigation{(triage?.by || fix?.by) && ` · requested by ${triage?.by || fix?.by}`}</small>
-    </header>
-    {triage && <h3>{triage.headline}</h3>}
-
-    {fix && <div className="fix-summary">
-      <b>AI fixed {plural(fix.operations.length, 'problem')}</b>
-      <div className="fix-score">
-        <div><small>Issues</small><b>{fix.before.total} <span>→</span> {fix.after.total}</b></div>
-        <div><small>Critical</small><b>{fix.before.critical} <span>→</span> {fix.after.critical}</b></div>
-        <div><small>Rows</small><b>{fix.rows.before.toLocaleString()} <span>→</span> {fix.rows.after.toLocaleString()}</b></div>
-      </div>
-    </div>}
-    <div className="actions">
-      {fix && <a className="button primary" href={api.fixedUrl(projectId, run.id)} download={fix.file_name}><Icon name="download" size={14} /> Download fixed file</a>}
-      {fix && <button className="button outline" disabled={!!busy} onClick={recheck}>{busy === 'recheck' ? <Spinner text="Checking…" /> : 'Check the fixed file'}</button>}
-      {triage && <button className="button ghost" onClick={() => copyText(triage.message, notify, 'Message copied')}><Icon name="copy" size={14} /> Copy message to team</button>}
-    </div>
-
-    {triage && triage.root_causes.length > 0 && <div className="ai-part">
-      <h4>What went wrong</h4>
-      <p className="muted">{triage.verdict_reason}</p>
-      <ol className="causes">{triage.root_causes.map((c, i) => <li key={i}><span className={`conf ${c.confidence}`}>{c.confidence}</span>
-        <div><b>{c.hypothesis}</b><small>{c.evidence}</small></div></li>)}</ol>
-    </div>}
-    {triage && triage.actions.length > 0 && <div className="ai-part">
-      <h4>Next steps</h4>
-      <ul className="checklist">{triage.actions.map((a, i) => <li key={i}><label><input type="checkbox" /> <span>{a.step}</span> <em>{a.owner}</em></label></li>)}</ul>
-    </div>}
-
-    {(triage || (fix && (fix.operations.length > 0 || fix.not_fixed.length > 0))) && <details className="fold">
-      <summary><span>Full details</span></summary>
-      <div className="fold-body">
-        {fix && fix.operations.length > 0 && <div className="ai-part">
-          <h4>What the AI fixed</h4>
-          <p className="muted">{fix.summary}</p>
-          <ol className="causes">{fix.operations.map((op, i) => <li key={i}><span className="conf done">fixed</span>
-            <div><b>{op.effect}</b><small>{op.reason}</small></div></li>)}</ol>
-          {fix.warnings.map((w, i) => <p key={i} className="note"><Icon name="info" size={13} /> {w}</p>)}
-        </div>}
-        {fix && fix.not_fixed.length > 0 && <div className="ai-part">
-          <h4>Left for a person</h4>
-          <ul className="notify">{fix.not_fixed.map((n, i) => <li key={i}><b>{n.issue}</b> {n.why}</li>)}</ul>
-        </div>}
-        {triage && triage.notify.length > 0 && <div className="ai-part">
-          <h4>Who to tell</h4>
-          <ul className="notify">{triage.notify.map((n, i) => <li key={i}><b>{n.who}</b> {n.why}</li>)}</ul>
-        </div>}
-        {triage && <div className="ai-part"><h4>Message to send</h4><CodeBlock code={triage.message} label="Copy message" /></div>}
-        {triage && triage.steps.length > 0 && <div className="ai-part">
-          <h4>How the agent investigated</h4>
-          <ol className="agent-steps">{triage.steps.map((s, i) => <li key={i}>{describeStep(s)}</li>)}</ol>
-        </div>}
-      </div>
-    </details>}
-    {(!triage || !fix) && <div className="actions"><small className="muted">{triage ? 'No repaired copy yet.' : 'No diagnosis yet.'}</small>{button}</div>}
-  </section>
-}
-
-/** One tool call by the triage agent, in words. */
-function describeStep(step: Triage['steps'][number]) {
-  const input = step.input || {}
-  const column = typeof input.column === 'string' ? input.column : null
-  switch (step.tool) {
-    case 'list_issues': return 'Listed the issues the checks found'
-    case 'get_column_stats': return column ? <>Compared column <code>{column}</code> with the baseline</> : 'Compared a column with the baseline'
-    case 'get_run_history': return 'Looked at earlier checks of this data'
-    case 'get_consumers': return 'Looked up who uses this data'
-    default: return <><code>{step.tool}</code>{Object.values(input).length > 0 && ` ${Object.values(input).map(String).join(', ')}`}</>
-  }
 }
 
 /** The drift model's column drivers, parsed from "amount (90%), quantity (9%)". */

@@ -139,7 +139,7 @@ function Welcome({ onCreated }: { onCreated: (c: Created) => void }) {
     <ol className="how">
       <li><b>Connect your sources</b><span>Databases, spreadsheets and file links. Passwords stay on the server; access is read-only.</span></li>
       <li><b>AI maps each one to your standard</b><span>Renamed columns, cents vs. dollars, numbers stored as text. You approve once; every later pull converts automatically.</span></li>
-      <li><b>Get one unified, checked table</b><span>Rules and an ML drift model catch problems. AI investigates them and repairs a copy.</span></li>
+      <li><b>Get one unified, checked table</b><span>Rules and an ML drift model catch problems, and AI sums up what went wrong.</span></li>
     </ol>
     <div className="welcome-actions">
       <CreateProject onCreated={onCreated} />

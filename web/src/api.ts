@@ -13,8 +13,8 @@ export type Issue = {
 export type Report = {
   status: 'passed' | 'failed'; issues: Issue[]; rows: { baseline: number; current: number }
   passed_checks: string[]; affected_consumers: string[]; schema_changed: boolean; data_file: string
-  ai_note?: string | null; markdown?: string; triage?: Triage | null; counts?: Record<Severity, number>
-  charts?: Record<string, ColumnChart>; fix?: Fix | null; overview?: Overview | null
+  ai_note?: string | null; markdown?: string; counts?: Record<Severity, number>
+  charts?: Record<string, ColumnChart>; overview?: Overview | null
   source?: { id: string; name: string; kind: string; type?: string; rows_pulled: number; mapped: boolean; steps: string[]; problems: string[] }
   unified?: { sources: Array<{ name: string; kind: string; type?: string; rows: number; error: string | null; problems: string[] }> }
   delivered?: Delivery[]
@@ -31,7 +31,6 @@ export type Fix = {
   before: Counts; after: Counts & { remaining: string[] }; rows: { before: number; after: number }
   file_name: string; by?: string; at?: string
 }
-export type Investigation = { triage: Triage | null; fix: Fix | null; errors: Partial<Record<'triage' | 'fix', string>> }
 export type SourceField = { name: string; label: string; placeholder: string; secret: boolean; required: boolean; multiline: boolean; help: string; input: 'text' | 'file' }
 export type SourceKind = { kind: string; label: string; group: string; description: string; fields: SourceField[]; available: boolean; missing_packages: string[]; hidden: boolean; has_sample: boolean }
 export type Step = { operation: string; args: Record<string, unknown>; reason: string; effect?: string }
@@ -60,12 +59,6 @@ export type Comparison = {
   dropped: Array<{ name: string; effect: string }>; table_steps: string[]; problems: string[]
   rows: { before: number; after: number; standard: number }; before: Counts; after: Counts
   table_issues: ColumnIssue[]; show_values: boolean
-}
-export type Triage = {
-  headline: string; verdict: 'block' | 'investigate' | 'safe_to_ship'; verdict_reason: string
-  root_causes: Array<{ hypothesis: string; confidence: 'low' | 'medium' | 'high'; evidence: string }>
-  actions: Array<{ step: string; owner: string }>; notify: Array<{ who: string; why: string }>; message: string
-  steps: Array<{ tool: string; input: Record<string, unknown> }>; model: string; by?: string; at?: string
 }
 export type RulesDraft = { config_yaml: string; summary: string; not_supported: string[] }
 export type ReviewStatus = 'open' | 'acknowledged' | 'resolved'
@@ -112,7 +105,6 @@ export const api = {
   users: () => request<User[]>('GET', '/api/users'),
   addUser: (u: { name: string; email: string; password: string; role: User['role'] }) => request<User>('POST', '/api/users', u),
   removeUser: (id: string) => request('DELETE', `/api/users/${id}`),
-  investigate: (id: string, run: string) => request<Investigation>('POST', `/api/projects/${id}/runs/${run}/investigate`),
   overview: (id: string, run: string) => request<Overview>('POST', `/api/projects/${id}/runs/${run}/overview`),
   runDataUrl: (id: string, run: string) => `${API}/api/projects/${id}/runs/${run}/data`,
   sourceCatalog: () => request<SourceKind[]>('GET', '/api/sources/catalog'),
@@ -144,8 +136,6 @@ export const api = {
   removeDestination: (id: string, did: string) => request('DELETE', `/api/projects/${id}/destinations/${did}`),
   sendRun: (id: string, run: string) => request<{ delivered: Delivery[] }>('POST', `/api/projects/${id}/runs/${run}/send`),
   unify: (id: string) => request<Report & { run_id: string }>('POST', `/api/projects/${id}/unify`),
-  checkFixed: (id: string, run: string) => request<Report & { run_id: string }>('POST', `/api/projects/${id}/runs/${run}/fixed/check`),
-  fixedUrl: (id: string, run: string) => `${API}/api/projects/${id}/runs/${run}/fixed`,
   review: (id: string, run: string, status: ReviewStatus) => request<Review>('PUT', `/api/projects/${id}/runs/${run}/review`, { status }),
   health: () => request<{ version: string; ai: boolean }>('GET', '/api/health'),
   projects: () => request<Project[]>('GET', '/api/projects'),

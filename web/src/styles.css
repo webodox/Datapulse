@@ -247,12 +247,7 @@ dt { color: var(--muted) } dd { margin: 0; font-family: var(--mono); font-size: 
 .note { background: var(--ai-soft); border-radius: 8px; padding: 10px 12px; font-size: 14px }
 .passed { display: flex; align-items: center; gap: 7px; color: var(--good-text); font-size: 14px }
 
-/* ---------- AI triage + ML drift ---------- */
-.triage-cta { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 10px; background: var(--ai-soft); flex-wrap: wrap }
-.triage-cta > div { flex: 1; min-width: 220px; display: grid }
-.triage-cta small { color: var(--muted) }
-.triage-icon { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--surface); color: var(--ai); flex: none }
-.triage-cta .button.primary { background: var(--ai); color: #fff }
+/* ---------- AI panels (mapping review) + ML drift ---------- */
 .triage { border: 1px solid color-mix(in srgb, var(--ai) 35%, var(--border)); border-radius: 12px; padding: 16px 18px; display: grid; gap: 8px; background: linear-gradient(180deg, var(--ai-soft), var(--surface) 120px) }
 .triage header { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap }
 .triage header small { display: inline-flex; gap: 5px; align-items: center }
@@ -261,16 +256,7 @@ dt { color: var(--muted) } dd { margin: 0; font-family: var(--mono); font-size: 
 .pill.verdict.failed { background: var(--crit-soft); color: var(--crit-text) }
 .pill.verdict.issues { background: var(--warn-soft); color: var(--warn-text) }
 .pill.verdict.clean { background: var(--good-soft); color: var(--good-text) }
-.causes, .checklist, .notify, .steps ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px }
-.causes li { display: flex; gap: 10px; align-items: flex-start }
-.causes div { display: grid } .causes small { color: var(--muted) }
-.conf { font: 600 11px var(--mono); text-transform: uppercase; padding: 2px 7px; border-radius: 6px; flex: none; margin-top: 2px; background: var(--surface-3); color: var(--muted) }
-.conf.done { background: var(--good-soft); color: var(--good-text) }
-.conf.high { background: var(--crit-soft); color: var(--crit-text) } .conf.medium { background: var(--warn-soft); color: var(--warn-text) }
-.checklist label { display: flex; gap: 8px; align-items: baseline; cursor: pointer }
-.checklist input { accent-color: var(--accent) }
-.checklist input:checked + span { text-decoration: line-through; color: var(--muted) }
-.checklist em { font-style: normal; font-size: 12.5px; color: var(--muted); background: var(--surface-3); padding: 0 7px; border-radius: 6px; white-space: nowrap }
+.notify, .steps ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px }
 .notify li { font-size: 14px } .notify b { margin-right: 4px }
 .steps ol { gap: 3px; margin: 6px 0; font-size: 13.5px; list-style: decimal; padding-left: 22px }
 .drift { display: grid; grid-template-columns: 170px 1fr; gap: 18px; padding: 12px; background: var(--surface-2); border-radius: 8px }
@@ -580,18 +566,3 @@ small.hl { color: var(--warn-text); font-weight: 600; display: inline-flex; gap:
 .deliveries li.ok { color: var(--good-text) } .deliveries li.held { color: var(--warn-text) } .deliveries li.bad { color: var(--crit-text) }
 .deliveries span { color: var(--ink-2) }
 @media (max-width: 520px) { .mode-pick { grid-template-columns: 1fr } }
-/* ---------- AI investigation: summary on top, sections folded ---------- */
-.fix-summary { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px }
-.fix-summary > b { font-size: 15px }
-.fix-summary .fix-score b { font-size: 18px }
-.ai-part { display: grid; gap: 6px }
-.ai-part > p { margin: 0 }
-.fold-body .ai-part + .ai-part { border-top: 1px solid var(--border); padding-top: 10px }
-.fold { border: 1px solid var(--border); border-radius: 10px; background: var(--surface) }
-.fold > summary { color: var(--ink); list-style: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; font-weight: 600; font-size: 14.5px }
-.fold > summary::-webkit-details-marker { display: none }
-.fold > summary::after { content: '▾'; margin-left: auto; color: var(--muted); font-size: 13px }
-.fold[open] > summary::after { content: '▴' }
-.fold-body { padding: 0 14px 12px; display: grid; gap: 10px }
-.fold-body > p { margin: 0 }
-.agent-steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 14px }

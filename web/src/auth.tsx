@@ -64,7 +64,7 @@ function Team({ me }: { me: User }) {
 
   return <section className="card">
     <h2>Team</h2>
-    <p className="muted">Everyone here sees the same projects, checks and AI triage.</p>
+    <p className="muted">Everyone here sees the same projects and checks.</p>
     <ul className="people">{users.map(u => <li key={u.id}>
       <span className="avatar">{u.name.slice(0, 1).toUpperCase()}</span>
       <span><b>{u.name}{u.id === me.id && ' (you)'}</b><small>{u.email}</small></span>
