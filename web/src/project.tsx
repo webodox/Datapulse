@@ -115,10 +115,26 @@ function RunHistory({ runs, selected, select }: { runs: Run[]; selected: string;
 function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; select: (id?: string) => void }) {
   const notify = useNotify()
   const [filter, setFilter] = useState<Severity | null>(null)
+  const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({})
   const { report } = run
   const tone = runTone(run)
   const counts = SEVERITIES.map(s => [s, report.issues.filter(i => i.severity === s).length] as const).filter(([, n]) => n)
   const shown = report.issues.filter(i => !filter || i.severity === filter)
+
+  const issueKey = (issue: Issue, idx: number) => {
+    const rawIdx = report.issues.indexOf(issue)
+    return `${issue.check}-${issue.columns.join(',')}-${rawIdx >= 0 ? rawIdx : idx}`
+  }
+
+  const allExpanded = shown.length > 0 && shown.every((issue, i) => !!expandedMap[issueKey(issue, i)])
+  const toggleAll = () => {
+    const next = !allExpanded
+    const updated: Record<string, boolean> = { ...expandedMap }
+    shown.forEach((issue, i) => {
+      updated[issueKey(issue, i)] = next
+    })
+    setExpandedMap(updated)
+  }
 
   return <section className="card report">
     <div className={`verdict ${tone}`}>
@@ -136,38 +152,74 @@ function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectI
     {report.unified && <UnifiedNote projectId={projectId} run={run} changed={changed} />}
     {report.issues.length > 0 && <InvestigateSection run={run} projectId={projectId} ai={ai} changed={changed} select={select} />}
 
-    {counts.length > 1 && <div className="filters">
-      <button className={!filter ? 'on' : ''} onClick={() => setFilter(null)}>All {report.issues.length}</button>
-      {counts.map(([s, n]) => <button key={s} className={`${s} ${filter === s ? 'on' : ''}`} onClick={() => setFilter(s)}>
-        <Icon name={SEVERITY_ICON[s]} size={13} /> {n} {s}</button>)}
+    {report.issues.length > 0 && <div className="issues-toolbar">
+      {counts.length > 1 ? <div className="filters">
+        <button className={!filter ? 'on' : ''} onClick={() => setFilter(null)}>All {report.issues.length}</button>
+        {counts.map(([s, n]) => <button key={s} className={`${s} ${filter === s ? 'on' : ''}`} onClick={() => setFilter(s)}>
+          <Icon name={SEVERITY_ICON[s]} size={13} /> {n} {s}</button>)}
+      </div> : <span />}
+      {shown.length > 0 && <button className="button ghost small-btn issue-toggle-all" onClick={toggleAll}>
+        <Icon name="chevronDown" size={13} className={`issue-chevron ${allExpanded ? 'open' : ''}`} />
+        {allExpanded ? 'Collapse all' : 'Expand all'}
+      </button>}
     </div>}
 
-    {shown.map((issue, i) => <IssueCard key={`${issue.check}-${issue.columns}-${i}`} issue={issue} charts={report.charts} />)}
+    {shown.map((issue, i) => {
+      const key = issueKey(issue, i)
+      return <IssueCard
+        key={key}
+        issue={issue}
+        charts={report.charts}
+        open={!!expandedMap[key]}
+        onToggle={() => setExpandedMap(prev => ({ ...prev, [key]: !prev[key] }))}
+      />
+    })}
     {report.ai_note && <p className="note"><Icon name="sparkle" size={13} /> {report.ai_note}</p>}
     {report.passed_checks.length > 0 && <p className="passed"><Icon name="check" size={14} /> Passed: {report.passed_checks.map(c => c.replace('_', ' ')).join(', ')}</p>}
   </section>
 }
 
-function IssueCard({ issue, charts }: { issue: Issue; charts?: Record<string, ColumnChart> }) {
+function IssueCard({ issue, charts, open, onToggle }: { issue: Issue; charts?: Record<string, ColumnChart>; open?: boolean; onToggle?: () => void }) {
+  const [localOpen, setLocalOpen] = useState(false)
+  const isExpanded = open !== undefined ? open : localOpen
+  const toggle = onToggle || (() => setLocalOpen(o => !o))
   const measured = Object.entries(issue.measured || {})
-  return <article className={`issue ${issue.severity}`}>
-    <header>
-      <span className={`pill ${issue.severity}`}><Icon name={SEVERITY_ICON[issue.severity]} size={12} /> {issue.severity}</span>
-      <h3>{issue.title}</h3>
+
+  return <article className={`issue ${issue.severity}${isExpanded ? ' expanded' : ' collapsed'}`}>
+    <header
+      className="issue-head"
+      onClick={toggle}
+      role="button"
+      tabIndex={0}
+      aria-expanded={isExpanded}
+      aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${issue.title} message`}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() } }}
+    >
+      <div className="issue-title-group">
+        <span className={`pill ${issue.severity}`}><Icon name={SEVERITY_ICON[issue.severity]} size={12} /> {issue.severity}</span>
+        <h3>{issue.title}</h3>
+      </div>
+      <div className="issue-toggle-btn" aria-hidden="true">
+        <span className="issue-toggle-text">{isExpanded ? 'Hide message' : 'View message'}</span>
+        <Icon name="chevronDown" size={14} className={`issue-chevron ${isExpanded ? 'open' : ''}`} />
+      </div>
     </header>
-    <p>{issue.measured_summary}</p>
-    {issue.check === 'ml_drift' && <DriftBars issue={issue} />}
-    <IssueChart issue={issue} charts={charts} />
-    <p className="cause"><b>Possible cause</b> {issue.suggested_explanation}</p>
-    {issue.ai_explanation && <p className="cause ai"><b><Icon name="sparkle" size={12} /> AI suggestion</b> {issue.ai_explanation}</p>}
-    {issue.consumers.length > 0 && <p className="affects"><b>May affect</b>{issue.consumers.map(c =>
-      <span key={c.name} className="chip" title={c.dataset_wide ? 'Reads this dataset' : `Uses ${c.columns.join(', ')}`}>{c.name}</span>)}</p>}
-    {(measured.length > 0 || issue.examples.length > 0) && <details>
-      <summary>Details</summary>
-      <dl>{measured.map(([k, v]) => <div key={k}><dt>{k.replace(/_/g, ' ')}</dt><dd>{fmtValue(v)}</dd></div>)}</dl>
-      {issue.examples.length > 0 && <p className="examples">Examples: {issue.examples.join(' · ')}</p>}
-      <small className="muted">Check: <code>{issue.check}</code></small>
-    </details>}
+
+    {isExpanded && <div className="issue-body">
+      <p className="issue-summary">{issue.measured_summary}</p>
+      {issue.check === 'ml_drift' && <DriftBars issue={issue} />}
+      <IssueChart issue={issue} charts={charts} />
+      {issue.suggested_explanation && <p className="cause"><b>Possible cause</b> {issue.suggested_explanation}</p>}
+      {issue.ai_explanation && <p className="cause ai"><b><Icon name="sparkle" size={12} /> AI suggestion</b> {issue.ai_explanation}</p>}
+      {issue.consumers.length > 0 && <p className="affects"><b>May affect</b>{issue.consumers.map(c =>
+        <span key={c.name} className="chip" title={c.dataset_wide ? 'Reads this dataset' : `Uses ${c.columns.join(', ')}`}>{c.name}</span>)}</p>}
+      {(measured.length > 0 || issue.examples.length > 0) && <details>
+        <summary>Details</summary>
+        <dl>{measured.map(([k, v]) => <div key={k}><dt>{k.replace(/_/g, ' ')}</dt><dd>{fmtValue(v)}</dd></div>)}</dl>
+        {issue.examples.length > 0 && <p className="examples">Examples: {issue.examples.join(' · ')}</p>}
+        <small className="muted">Check: <code>{issue.check}</code></small>
+      </details>}
+    </div>}
   </article>
 }
 
