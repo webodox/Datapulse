@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, API_ORIGIN, fmtDate, plural, runTone, timeAgo, SEVERITIES, TONE_LABEL,
+import { api, fmtDate, plural, runTone, timeAgo, SEVERITIES, TONE_LABEL,
   type Issue, type Overview, type ProjectDetail, type Run, type Severity, type RulesDraft, type ReviewStatus, type ColumnChart } from './api'
 import type { Route } from './App'
 import { BeforeAfter, NullRates } from './charts'
@@ -8,17 +8,17 @@ import { SourceNote, SourcesTab, UnifiedNote } from './sources'
 import { Icon, type IconName } from './icons'
 import { CodeBlock, copyText, Dropzone, Empty, Menu, Spinner, useAction, useNotify } from './ui'
 
-export const TABS = ['sources', 'checks', 'baseline', 'rules', 'api'] as const
+export const TABS = ['sources', 'checks', 'settings'] as const
 export type Tab = typeof TABS[number]
-const TAB_LABEL: Record<Tab, string> = { sources: 'Sources', checks: 'Results', baseline: 'Standard', rules: 'Rules', api: 'Send data' }
+const TAB_LABEL: Record<Tab, string> = { sources: 'Sources', checks: 'Results', settings: 'Settings' }
 const SEVERITY_ICON: Record<Severity, IconName> = { critical: 'alert', warning: 'flag', info: 'info' }
 const FAIL_ON: Record<string, string> = {
   critical: 'Fails on critical issues', warning: 'Fails on warnings or worse', info: 'Fails on any issue', never: 'Never fails',
 }
 
-type Props = { route: Route & { id: string }; go: (r: Route) => void; onChanged: () => Promise<unknown>; apiKey?: string; dismissKey: () => void; ai: boolean }
+type Props = { route: Route & { id: string }; go: (r: Route) => void; onChanged: () => Promise<unknown>; ai: boolean }
 
-export function ProjectView({ route, go, onChanged, apiKey, dismissKey, ai }: Props) {
+export function ProjectView({ route, go, onChanged, ai }: Props) {
   const notify = useNotify()
   const [detail, setDetail] = useState<ProjectDetail | null>(null)
   const [draft, setDraft] = useState('') // rules editor text survives tab switches
@@ -55,25 +55,21 @@ export function ProjectView({ route, go, onChanged, apiKey, dismissKey, ai }: Pr
       <Menu label="Project actions" items={[{ label: 'Delete project', onClick: remove, danger: true }]} />
     </header>
 
-    {apiKey && <div className="banner">
-      <Icon name="shield" size={18} />
-      <div><b>Copy this project's API key now. It won't be shown again.</b><code>{apiKey}</code></div>
-      <button className="button outline" onClick={() => copyText(apiKey, notify, 'API key copied')}><Icon name="copy" size={14} /> Copy</button>
-      <button className="icon-btn" aria-label="Dismiss" onClick={dismissKey}><Icon name="x" /></button>
-    </div>}
-
     <nav className="tabs" role="tablist">
       {TABS.map(t => <a key={t} role="tab" aria-selected={route.tab === t} href={`#/p/${detail.id}/${t}`} className={route.tab === t ? 'active' : ''}>
         {TAB_LABEL[t]}{t === 'checks' && detail.runs.length > 0 && <span className="count">{detail.runs.length}</span>}
-        {t === 'rules' && dirty && <span className="unsaved" title="Unsaved changes" />}
+        {t === 'settings' && dirty && <span className="unsaved" title="Unsaved changes" />}
       </a>)}
     </nav>
 
     {route.tab === 'checks' && <ChecksTab detail={detail} runId={route.run} select={run => go({ ...route, run })} changed={changed} ai={ai} />}
     {route.tab === 'sources' && <SourcesTab detail={detail} changed={changed} ai={ai} openRun={run => go({ id: detail.id, tab: 'checks', run })} />}
-    {route.tab === 'baseline' && <BaselineTab detail={detail} changed={changed} />}
-    {route.tab === 'rules' && <RulesTab detail={detail} draft={draft} setDraft={setDraft} dirty={dirty} changed={changed} ai={ai} />}
-    {route.tab === 'api' && <ApiTab detail={detail} apiKey={apiKey} />}
+    {route.tab === 'settings' && <>
+      <h2 className="section-title">Standard format</h2>
+      <BaselineTab detail={detail} changed={changed} />
+      <h2 className="section-title">Rules</h2>
+      <RulesTab detail={detail} draft={draft} setDraft={setDraft} dirty={dirty} changed={changed} ai={ai} />
+    </>}
   </div>
 }
 
@@ -435,27 +431,5 @@ function RulesTab({ detail, draft, setDraft, dirty, changed, ai }:
           {busy === 'suggest' ? <Spinner text="Thinking…" /> : <><Icon name="sparkle" size={14} /> Suggest rules from baseline</>}</button>}
       </div>
     </aside>
-  </div>
-}
-
-/* ---------- send data from other services ---------- */
-
-function ApiTab({ detail, apiKey }: { detail: ProjectDetail; apiKey?: string }) {
-  const url = `${API_ORIGIN}/api/projects/${detail.id}/ingest`
-  const curl = `curl -X POST ${url} \\
-  -H 'Content-Type: application/json' \\
-  -H 'X-DataPulse-Key: ${apiKey || 'YOUR_PROJECT_API_KEY'}' \\
-  -d '{"dataset_name": "orders", "role": "candidate",
-       "rows": [{"order_id": 1, "amount": 22.5, "status": "paid"}]}'`
-  return <div className="card prose">
-    <h2>Send rows from any service</h2>
-    <p>Any language that can make an HTTP request can run a check. The response is the same JSON report the CLI writes with <code>--json</code>.</p>
-    <CodeBlock code={curl} label="Copy command" />
-    <ul>
-      <li><code>"role": "baseline"</code> replaces the baseline; <code>"candidate"</code> (the default) runs a check.</li>
-      <li>Up to 50,000 rows per request. For bigger files, use Quick check on the Sources tab, or the CLI / GitHub Action.</li>
-      <li>The API key was shown once, when the project was created. Only its hash is stored.</li>
-    </ul>
-    <a className="link" href={`${API_ORIGIN}/docs`} target="_blank" rel="noreferrer">Interactive API docs <Icon name="external" size={13} /></a>
   </div>
 }
