@@ -276,7 +276,7 @@ function IssueRow({ issue, blocking, charts, open, toggle }:
 
 /* ---------- shared issue status ---------- */
 
-const REVIEW: Record<ReviewStatus, string> = { open: 'Open', acknowledged: 'Acknowledged', resolved: 'Resolved' }
+const REVIEW: Record<ReviewStatus, string> = { open: 'Open', resolved: 'Resolved' }
 
 function ReviewBar({ run, projectId, changed }: { run: Run; projectId: string; changed: () => Promise<unknown> }) {
   const [busy, act] = useAction()

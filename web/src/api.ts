@@ -61,7 +61,7 @@ export type Comparison = {
   table_issues: ColumnIssue[]; show_values: boolean
 }
 export type RulesDraft = { config_yaml: string; summary: string; not_supported: string[] }
-export type ReviewStatus = 'open' | 'acknowledged' | 'resolved'
+export type ReviewStatus = 'open' | 'resolved'
 export type Review = { status: ReviewStatus; by?: string | null; at?: string | null }
 export type Run = {
   id: string; status: string; issue_count: number; created_at: string; report: Report

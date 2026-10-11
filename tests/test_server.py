@@ -273,8 +273,9 @@ def test_checks_record_who_ran_them_and_review_status_is_shared(client):
     run = client.get(f"/api/projects/{seeded['id']}").json()["runs"][0]
     assert run["created_by"] == "Ada Admin" and run["review"]["status"] == "open"
     url = f"/api/projects/{seeded['id']}/runs/{doc['run_id']}/review"
-    assert client.put(url, json={"status": "acknowledged"}).json()["by"] == "Ada Admin"
-    assert client.get(f"/api/projects/{seeded['id']}").json()["runs"][0]["review"]["status"] == "acknowledged"
+    assert client.put(url, json={"status": "resolved"}).json()["by"] == "Ada Admin"
+    assert client.get(f"/api/projects/{seeded['id']}").json()["runs"][0]["review"]["status"] == "resolved"
+    assert client.put(url, json={"status": "acknowledged"}).status_code == 422
     assert client.put(url, json={"status": "done"}).status_code == 422
     assert client.put(f"/api/projects/{seeded['id']}/runs/nope/review", json={"status": "resolved"}).status_code == 404
 

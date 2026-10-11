@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 # Columns added after the first release: (table, column, definition)
 ADDED_COLUMNS = [
     ("runs", "created_by", "TEXT"),          # who ran the check: a user's name, or "API"
-    ("runs", "review_status", "TEXT NOT NULL DEFAULT 'open'"),  # open | acknowledged | resolved
+    ("runs", "review_status", "TEXT NOT NULL DEFAULT 'open'"),  # open | resolved
     ("runs", "review_by", "TEXT"),
     ("runs", "review_at", "TEXT"),
 ]
@@ -137,3 +137,4 @@ def init_db() -> None:
             existing = {r["name"] for r in db.execute(f"PRAGMA table_info({table})")}
             if column not in existing:
                 db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        db.execute("UPDATE runs SET review_status = 'open' WHERE review_status = 'acknowledged'")  # status since removed

@@ -87,7 +87,7 @@ class DraftRules(BaseModel):
 
 
 class Review(BaseModel):
-    status: Literal["open", "acknowledged", "resolved"]
+    status: Literal["open", "resolved"]
 
 
 class IngestRows(BaseModel):

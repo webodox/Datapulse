@@ -387,7 +387,6 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .segmented button + button { border-left: 1px solid var(--border-strong) }
 .segmented button:hover:not(:disabled) { color: var(--ink) }
 .segmented .open.on { background: var(--crit-soft); color: var(--crit-text) }
-.segmented .acknowledged.on { background: var(--warn-soft); color: var(--warn-text) }
 .segmented .resolved.on { background: var(--good-soft); color: var(--good-text) }
 
 /* ---------- responsive ---------- */
