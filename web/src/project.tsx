@@ -118,8 +118,8 @@ function RunReport({ run, projectId, ai, changed, select }: { run: Run; projectI
   const tone = runTone(run)
   const [rule, setRule] = useState('')
   const [query, setQuery] = useState('')
-  const narrow = (next: { rule?: string; query?: string }) => {
-    setRule(next.rule ?? ''); setQuery(next.query ?? '')
+  const narrow = (next: string) => {
+    setRule(next); setQuery('')
     document.getElementById('issues')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
@@ -160,9 +160,9 @@ function tally(issues: Issue[], keys: (issue: Issue) => string[]) {
 
 const overviewRequests = new Map<string, Promise<Overview>>() // one request per run, even when effects run twice
 
-/** What's going on at a glance: an AI summary (written once per run) over counts by rule and column. */
+/** What's going on at a glance: an AI summary (written once per run) over counts by rule. */
 function OverviewCard({ run, projectId, ai, changed, narrow }:
-  { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; narrow: (f: { rule?: string; query?: string }) => void }) {
+  { run: Run; projectId: string; ai: boolean; changed: () => Promise<unknown>; narrow: (rule: string) => void }) {
   const { issues } = run.report
   const [overview, setOverview] = useState(run.report.overview || null)
   const [error, setError] = useState<string | null>(null)
@@ -197,9 +197,7 @@ function OverviewCard({ run, projectId, ai, changed, narrow }:
       <li key={i}><b>{f.title}</b><span>{f.detail}</span></li>)}</ol>}
     {issues.length > 3 && <div className="overview-facts">
       <div><small>By rule</small>{rules.slice(0, 5).map(([r, n]) =>
-        <button key={r} className="chip-btn" onClick={() => narrow({ rule: r })}>{ruleName(r)} <b>{n}</b></button>)}</div>
-      {columns.length > 1 && <div><small>Most affected columns</small>{columns.slice(0, 5).map(([c, n]) =>
-        <button key={c} className="chip-btn" onClick={() => narrow({ query: c })}><code>{c}</code> <b>{n}</b></button>)}</div>}
+        <button key={r} className="chip-btn" onClick={() => narrow(r)}>{ruleName(r)} <b>{n}</b></button>)}</div>
     </div>}
   </section>
 }
@@ -225,12 +223,12 @@ function IssueList({ issues, charts, rule, setRule, query, setQuery }: { issues:
         {counts.length > 1 && counts.map(([s, n]) => <button key={s} className={`${s} ${severity === s ? 'on' : ''}`} onClick={() => refine(() => setSeverity(s))}>
           <Icon name={SEVERITY_ICON[s]} size={13} /> {n} {s}</button>)}
       </div>
-      {(rules.length > 1 || issues.length > 3) && <div className="issue-find">
+      {(rules.length > 1 || issues.length > 10) && <div className="issue-find">
         {rules.length > 1 && <select className="search" value={rule} onChange={e => refine(() => setRule(e.target.value))} aria-label="Filter by rule">
           <option value="">All rules</option>
           {rules.map(([r, n]) => <option key={r} value={r}>{ruleName(r)} ({n})</option>)}
         </select>}
-        {issues.length > 3 && <input className="search" value={query} onChange={e => refine(() => setQuery(e.target.value))}
+        {issues.length > 10 && <input className="search" value={query} onChange={e => refine(() => setQuery(e.target.value))}
           placeholder="Search issues or columns…" aria-label="Search issues" />}
       </div>}
     </div>
