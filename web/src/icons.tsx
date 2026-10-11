@@ -27,12 +27,12 @@ const PATHS: Record<string, string> = {
 
 export type IconName = keyof typeof PATHS
 
-/** The DataPulse mark: three sources merge into one line, which ends in a pulse. */
+/** The DataPulse mark: a row of records with one pulse in it. */
 export function Logo({ size = 20 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
-    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M2.5 5.5C6.5 5.5 7 12 10.5 12M2.5 18.5C6.5 18.5 7 12 10.5 12" opacity={0.6} />
-    <path d="M2.5 12h8l2-4.5 3 9 2-4.5h4" />
+  return <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+    <g fill="currentColor"><circle cx="3" cy="12" r="1.3" /><circle cx="6.5" cy="12" r="1.3" /><circle cx="21" cy="12" r="1.3" /></g>
+    <path d="M10 12l2.5-6.5 3.5 13 1.5-6.5" fill="none" stroke="currentColor" strokeWidth={2.2}
+      strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 }
 
