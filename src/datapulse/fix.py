@@ -185,7 +185,8 @@ Only repair what the evidence supports:
 leave those for a person and say so.
 - New columns are usually harmless; remove one only if it clearly does not belong.
 
-When you are done, summarize. You only ever see counts and statistics, never the data itself."""
+When you are done, summarize in one or two short sentences, and give each not_fixed reason in one sentence. You \
+only ever see counts and statistics, never the data itself."""
 
 SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["summary", "not_fixed", "warnings"],
