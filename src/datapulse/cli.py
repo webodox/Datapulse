@@ -10,7 +10,8 @@ from rich.console import Console
 from rich.text import Text
 
 from . import __version__
-from .ai import explain_issues, suggest_with_ai
+from .agent import TriageContext, run_triage
+from .ai import draft_rules, explain_issues, suggest_with_ai
 from .baseline import build_baseline, describe, load_baseline, parse_baseline, save_baseline
 from .checks import run_checks
 from .config import DEFAULT_CONFIG_NAME, STARTER_CONFIG, Config, load_config, parse_config_text
@@ -113,6 +114,24 @@ def _load_check_config(config, config_ref, console):
     return cfg, f"{cfg.source or 'defaults'} (working tree; none at {config_ref})"
 
 
+def _triage(report, baseline, df, cfg, console) -> None:
+    ctx = TriageContext(json.loads(render_json(report)), baseline["profile"], profile_dataframe(df, cfg.max_categories),
+                        consumers=[vars(c) for c in cfg.consumers])
+    try:
+        with console.status("AI triage agent is investigating…"):
+            report.triage = run_triage(ctx, cfg, on_step=lambda tool, args: console.print(
+                Text(f"  agent looked at {tool} {json.dumps(args) if args else ''}", style="dim")))
+    except DataPulseError as e:
+        console.print(Text(f"AI triage unavailable: {e}", style="yellow"))
+
+
+def _write_report(path: Optional[Path], text: str, kind: str, console: Console) -> None:
+    if path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        console.print(Text(f"{kind} report written to {path}", style="dim"))
+
+
 @app.command("check")
 @guarded
 def check_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file to check."),
@@ -127,7 +146,12 @@ def check_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file to
               markdown: Optional[Path] = typer.Option(None, "--markdown", help="Write the Markdown report here."),
               json_out: Optional[Path] = typer.Option(None, "--json", help="Also write a machine-readable JSON report "
                                                                            "(for scripts in any language)."),
+              reference: Optional[Path] = typer.Option(
+                  None, "--reference", help="The known-good data file itself; enables the ML drift check, which "
+                                            "trains a model to tell it apart from the new file (runs locally)."),
               ai: bool = typer.Option(False, "--ai", help="Add AI explanations (aggregates only; needs an API key)."),
+              triage: bool = typer.Option(False, "--triage", help="If issues are found, let the AI triage agent "
+                                                                  "investigate and write the incident note."),
               discover: bool = typer.Option(False, "--discover", help="Find code in any language that references "
                                                                       "the affected columns (heuristic)."),
               scan_root: Optional[Path] = typer.Option(None, "--scan-root", help="Directory to search (default: "
@@ -143,8 +167,8 @@ def check_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file to
         data = load_baseline(path)
         label = describe(data, str(path))
     df = load_dataframe(data_file)
-    report = run_checks(data, df, cfg, data_file=str(data_file), baseline_label=label,
-                        config_label=config_label)
+    report = run_checks(data, df, cfg, data_file=str(data_file), baseline_label=label, config_label=config_label,
+                        reference=load_dataframe(reference) if reference else None)
     if discover or cfg.discovery.enabled:
         cols = sorted(set(data["profile"]["columns"]) | set(df.columns))
         src = data.get("source", {}).get("file")
@@ -156,17 +180,12 @@ def check_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file to
         note = explain_issues(report, cfg)
         if note:
             console.print(Text(note, style="dim"))
+    if triage and report.issues:
+        _triage(report, data, df, cfg, console)
     render_terminal(report, console)
-    md_path = markdown or (Path(cfg.report.markdown) if cfg.report.markdown else None)
     md = render_markdown(report)
-    if md_path:
-        md_path.parent.mkdir(parents=True, exist_ok=True)
-        md_path.write_text(md, encoding="utf-8")
-        console.print(Text(f"Markdown report written to {md_path}", style="dim"))
-    if json_out:
-        json_out.parent.mkdir(parents=True, exist_ok=True)
-        json_out.write_text(render_json(report), encoding="utf-8")
-        console.print(Text(f"JSON report written to {json_out}", style="dim"))
+    _write_report(markdown or (Path(cfg.report.markdown) if cfg.report.markdown else None), md, "Markdown", console)
+    _write_report(json_out, render_json(report), "JSON", console)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
@@ -174,15 +193,15 @@ def check_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file to
     raise typer.Exit(report.exit_code)
 
 
-def _check_output(output: Path, cfg, force: bool) -> None:
-    protected = {Path(DEFAULT_CONFIG_NAME).resolve()}
-    if cfg.source:
-        protected.add(Path(cfg.source).resolve())
+def _write_new(output: Path, text: str, cfg, force: bool) -> None:
+    """Write suggestions to a separate file; never to the user's config, never over a file without --force."""
+    protected = {Path(DEFAULT_CONFIG_NAME).resolve()} | ({Path(cfg.source).resolve()} if cfg.source else set())
     if output.resolve() in protected:
         raise DataPulseError(f"Refusing to write to your configuration file {output}. Write to a separate "
                              "file and merge the entries you want by hand.")
     if output.exists() and not force:
         raise DataPulseError(f"{output} already exists. Use --force to overwrite it.")
+    output.write_text(text, encoding="utf-8")
 
 
 @app.command("scan")
@@ -216,8 +235,7 @@ def scan_cmd(data_file: Path = typer.Argument(..., help="The CSV/Parquet file wh
             typer.echo(f"      '{col}' at line {', '.join(map(str, lines))}")
     text = consumers_yaml(result)
     if output:
-        _check_output(output, cfg, force)
-        output.write_text(text, encoding="utf-8")
+        _write_new(output, text, cfg, force)
         typer.echo(f"\nSuggested consumers written to {output}. Review, then merge into {cfg.source or DEFAULT_CONFIG_NAME}.")
     else:
         typer.echo("\n" + text.rstrip())
@@ -239,8 +257,7 @@ def suggest_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file 
     profile = profile_dataframe(df, cfg.max_categories)
     text = render_yaml(suggest_rules(profile))
     if output:
-        _check_output(output, cfg, force)
-        output.write_text(text, encoding="utf-8")
+        _write_new(output, text, cfg, force)
         typer.echo(f"Suggested rules written to {output}. Review them, then merge what you want into "
                    f"{cfg.source or DEFAULT_CONFIG_NAME}.")
     else:
@@ -249,6 +266,63 @@ def suggest_cmd(data_file: Path = typer.Argument(..., help="CSV or Parquet file 
     if ai:
         typer.echo("\nAI-generated suggestions (unverified; generated from aggregate statistics only):")
         typer.echo(suggest_with_ai(profile, cfg))
+
+
+@app.command("draft-rules")
+@guarded
+def draft_rules_cmd(request: str = typer.Argument(..., help='What you want, in plain English, e.g. "order_id must '
+                                                             'be unique and alert if amount shifts".'),
+                    data_file: Optional[Path] = typer.Option(None, "--data", help="Data file, so the AI knows the "
+                                                                                  "real column names (aggregates only)."),
+                    config: Optional[Path] = CONFIG_OPT,
+                    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write the draft to this NEW file."),
+                    force: bool = typer.Option(False, "--force", help="Allow overwriting an existing --output file.")):
+    """Turn a plain-English request into a validated datapulse.yml (AI). Never edits your config."""
+    from .config import STARTER_CONFIG
+    cfg = load_config(config)
+    current = Path(cfg.source).read_text(encoding="utf-8") if cfg.source else STARTER_CONFIG
+    profile = profile_dataframe(load_dataframe(data_file), cfg.max_categories) if data_file else None
+    with Console(stderr=True).status("Drafting rules…"):
+        draft = draft_rules(request, current, profile, cfg)
+    if output:
+        _write_new(output, draft["config_yaml"], cfg, force)
+        typer.echo(f"Draft written to {output}. Review it, then replace {cfg.source or DEFAULT_CONFIG_NAME} if you like it.")
+    else:
+        typer.echo(draft["config_yaml"])
+    typer.echo(f"# What changed: {draft['summary']}")
+    for item in draft["not_supported"]:
+        typer.echo(f"# Not expressible as a rule: {item}")
+
+
+@app.command("fix")
+@guarded
+def fix_cmd(data_file: Path = typer.Argument(..., help="The data file that failed its checks."),
+            output: Path = typer.Option(..., "--output", "-o", help="Where to write the repaired copy (a NEW file)."),
+            config: Optional[Path] = CONFIG_OPT,
+            baseline: Optional[Path] = typer.Option(None, "--baseline", help="Baseline file (overrides config)."),
+            reference: Optional[Path] = typer.Option(None, "--reference", help="The known-good data file, so the "
+                                                                               "ML drift check is re-run too."),
+            force: bool = typer.Option(False, "--force", help="Allow overwriting an existing --output file.")):
+    """Let the AI repair agent fix a copy of a file, then re-check it (AI). Never changes the original."""
+    from .fix import RepairSession, run_repair
+    console = Console()
+    cfg = load_config(config)
+    if output.resolve() == data_file.resolve():
+        raise DataPulseError("--output must be a new file; the original is never overwritten.")
+    session = RepairSession(load_dataframe(data_file), load_baseline(baseline or Path(cfg.baseline)), cfg,
+                            reference=load_dataframe(reference) if reference else None)
+    with console.status("AI repair agent is working…"):
+        result = run_repair(session, on_step=lambda tool, args: console.print(
+            Text(f"  agent: {tool} {json.dumps(args) if args else ''}", style="dim")))
+    fixed = result.pop("fixed_frame")
+    _write_new(output, fixed.to_csv(index=False), cfg, force)
+    console.print(Text(f"\nIssues: {result['before']['total']} -> {result['after']['total']} "
+                       f"(rows {result['rows']['before']:,} -> {result['rows']['after']:,}). {result['summary']}", style="bold"))
+    for op in result["operations"]:
+        console.print(Text(f"  fixed: {op['effect']}  ({op['reason']})"))
+    for item in result["not_fixed"]:
+        console.print(Text(f"  left for a person: {item['issue']}: {item['why']}", style="yellow"))
+    console.print(Text(f"Repaired copy written to {output}. Review it before using it.", style="dim"))
 
 
 @app.command("github-outputs")

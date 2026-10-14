@@ -3,7 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f4f6f8" />
+    <meta name="theme-color" content="#f3f6f4" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script>
+      // apply the saved or system theme before first paint to avoid a light flash
+      try { var t = localStorage.getItem('datapulse-theme'); document.documentElement.dataset.theme = t === 'dark' || t === 'light' ? t : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') } catch (e) {}
+    </script>
     <meta name="description" content="Language-agnostic data quality monitoring for every pipeline." />
     <title>DataPulse — Data quality, in context</title>
   </head>

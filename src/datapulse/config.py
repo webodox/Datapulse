@@ -59,6 +59,14 @@ class DistributionCfg:
 
 
 @dataclass
+class MLDriftCfg:
+    severity: str = "warning"
+    max_auc: float = 0.7  # 0.5 = the model can't tell the files apart; 1.0 = it always can
+    max_rows: int = 5000
+    exclude: List[str] = field(default_factory=list)
+
+
+@dataclass
 class Consumer:
     name: str
     type: str
@@ -100,6 +108,7 @@ class Config:
     categorical: CategoricalCfg = field(default_factory=CategoricalCfg)
     duplicates: DuplicatesCfg = field(default_factory=DuplicatesCfg)
     distribution: DistributionCfg = field(default_factory=DistributionCfg)
+    ml_drift: MLDriftCfg = field(default_factory=MLDriftCfg)
     consumers: List[Consumer] = field(default_factory=list)
     report: ReportCfg = field(default_factory=ReportCfg)
     ai: AICfg = field(default_factory=AICfg)
@@ -143,6 +152,9 @@ checks:
     severity: warning
     psi_threshold: 0.2        # Population Stability Index limit
     max_mean_shift_std: 1.0   # allowed mean shift, in baseline standard deviations
+  ml_drift:                   # a model learns to tell baseline rows from new rows; needs the baseline file
+    severity: warning
+    max_auc: 0.7              # 0.5 = indistinguishable (no drift), 1.0 = completely different
 
 # Map columns to the things that read them so reports can show who is affected.
 # consumers:
@@ -186,29 +198,34 @@ def _mapping(raw, path: str, allowed) -> dict:
     return raw
 
 
-def _severity(v, path: str, allow_off: bool = True) -> str:
-    choices = SEVERITIES + (("off",) if allow_off else ())
-    if v not in choices:
-        _fail(f"'{path}' must be one of {list(choices)}, got {v!r}")
-    return v
+def _choice(*choices):
+    def check(v, path):
+        if v not in choices:
+            _fail(f"'{path}' must be one of {list(choices)}, got {v!r}")
+        return v
+    return check
 
 
-def _number(v, path: str, lo: Optional[float] = None, hi: Optional[float] = None) -> float:
-    if isinstance(v, bool) or not isinstance(v, (int, float)):
-        _fail(f"'{path}' must be a number, got {v!r}")
-    if lo is not None and v < lo:
-        _fail(f"'{path}' must be >= {lo}, got {v!r}")
-    if hi is not None and v > hi:
-        _fail(f"'{path}' must be <= {hi}, got {v!r}")
-    return float(v)
+def _number(lo: Optional[float] = None, hi: Optional[float] = None):
+    def check(v, path):
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            _fail(f"'{path}' must be a number, got {v!r}")
+        if lo is not None and v < lo:
+            _fail(f"'{path}' must be >= {lo}, got {v!r}")
+        if hi is not None and v > hi:
+            _fail(f"'{path}' must be <= {hi}, got {v!r}")
+        return float(v)
+    return check
 
 
-def _int(v, path: str, lo: int = 0) -> int:
-    if isinstance(v, bool) or not isinstance(v, int):
-        _fail(f"'{path}' must be an integer, got {v!r}")
-    if v < lo:
-        _fail(f"'{path}' must be >= {lo}, got {v!r}")
-    return v
+def _int(lo: int = 0):
+    def check(v, path):
+        if isinstance(v, bool) or not isinstance(v, int):
+            _fail(f"'{path}' must be an integer, got {v!r}")
+        if v < lo:
+            _fail(f"'{path}' must be >= {lo}, got {v!r}")
+        return v
+    return check
 
 
 def _bool(v, path: str) -> bool:
@@ -229,115 +246,73 @@ def _str_list(v, path: str) -> List[str]:
     return list(v)
 
 
+def _rate_map(v, path: str) -> Dict[str, float]:
+    return {str(c): _number(0, 1)(x, f"{path}.{c}") for c, x in _mapping(v, path, v or {}).items()}
+
+
+def _nullable(check):
+    """A validator whose explicit `null` is stored (by default `null` keeps the default value)."""
+    check.nullable = True
+    return check
+
+
+SEVERITY = _choice(*SEVERITIES, "off")
+MIN_ML_ROWS = 100
+RATE = _number(0, 1)
+# section path -> (attribute on Config, {key: validator})
+SECTIONS = {
+    "checks.schema": ("schema", {"missing_columns": SEVERITY, "added_columns": SEVERITY, "type_changes": SEVERITY}),
+    "checks.row_count": ("row_count", {"severity": SEVERITY, "max_change_pct": _number(0), "min_rows": _int()}),
+    "checks.null_rate": ("null_rate", {"severity": SEVERITY, "max_increase": RATE, "columns": _rate_map}),
+    "checks.categorical": ("categorical", {"severity": SEVERITY, "max_unexpected_rate": RATE, "columns": _str_list}),
+    "checks.duplicates": ("duplicates", {"severity": SEVERITY, "max_duplicate_rate": RATE, "columns": _str_list}),
+    "checks.distribution": ("distribution", {"severity": SEVERITY, "psi_threshold": _number(0),
+                                             "max_mean_shift_std": _number(0), "columns": _str_list}),
+    "checks.ml_drift": ("ml_drift", {"severity": SEVERITY, "max_auc": _number(0.5, 1), "max_rows": _int(MIN_ML_ROWS),
+                                     "exclude": _str_list}),
+    "report": ("report", {"markdown": _nullable(_str), "max_examples": _int(), "show_values": _bool}),
+    "discovery": ("discovery", {"enabled": _bool, "root": _str, "scope": _choice("readers", "all"),
+                                "exclude": _str_list}),
+    "ai": ("ai", {"enabled": _bool, "model": _str, "api_key_env": _str}),
+}
+TOP = {"baseline": _str, "fail_on": _choice(*FAIL_ON_CHOICES), "max_categories": _int(1)}
+
+
+def _apply(target, raw: dict, path: str, spec: dict) -> None:
+    for key, check in spec.items():
+        if key not in raw:
+            continue
+        value = raw[key]
+        if value is None:
+            if getattr(check, "nullable", False):
+                setattr(target, key, None)
+            continue
+        setattr(target, key, check(value, f"{path}.{key}" if path else key))
+
+
 def parse_config(raw) -> Config:
-    top = _mapping(raw, "<root>", {"version", "baseline", "fail_on", "max_categories",
-                                   "checks", "consumers", "report", "ai", "discovery"})
-    cfg = Config()
+    top = _mapping(raw, "<root>", {"version", "checks", "consumers", *TOP, *SECTIONS})
     if top.get("version", 1) != 1:
         _fail(f"unsupported 'version' {top.get('version')!r} (this release supports 1)")
-    if "baseline" in top:
-        cfg.baseline = _str(top["baseline"], "baseline")
-    if "fail_on" in top:
-        if top["fail_on"] not in FAIL_ON_CHOICES:
-            _fail(f"'fail_on' must be one of {list(FAIL_ON_CHOICES)}, got {top['fail_on']!r}")
-        cfg.fail_on = top["fail_on"]
-    if "max_categories" in top:
-        cfg.max_categories = _int(top["max_categories"], "max_categories", 1)
-
-    checks = _mapping(top.get("checks"), "checks",
-                      {"schema", "row_count", "null_rate", "categorical", "duplicates", "distribution"})
-    s = _mapping(checks.get("schema"), "checks.schema", {"missing_columns", "added_columns", "type_changes"})
-    for k in s:
-        setattr(cfg.schema, k, _severity(s[k], f"checks.schema.{k}"))
-
-    r = _mapping(checks.get("row_count"), "checks.row_count", {"severity", "max_change_pct", "min_rows"})
-    if "severity" in r:
-        cfg.row_count.severity = _severity(r["severity"], "checks.row_count.severity")
-    if "max_change_pct" in r:
-        cfg.row_count.max_change_pct = _number(r["max_change_pct"], "checks.row_count.max_change_pct", 0)
-    if r.get("min_rows") is not None:
-        cfg.row_count.min_rows = _int(r["min_rows"], "checks.row_count.min_rows")
-
-    n = _mapping(checks.get("null_rate"), "checks.null_rate", {"severity", "max_increase", "columns"})
-    if "severity" in n:
-        cfg.null_rate.severity = _severity(n["severity"], "checks.null_rate.severity")
-    if "max_increase" in n:
-        cfg.null_rate.max_increase = _number(n["max_increase"], "checks.null_rate.max_increase", 0, 1)
-    cols = _mapping(n.get("columns"), "checks.null_rate.columns", n.get("columns") or {})
-    for c, v in cols.items():
-        cfg.null_rate.columns[str(c)] = _number(v, f"checks.null_rate.columns.{c}", 0, 1)
-
-    c = _mapping(checks.get("categorical"), "checks.categorical", {"severity", "max_unexpected_rate", "columns"})
-    if "severity" in c:
-        cfg.categorical.severity = _severity(c["severity"], "checks.categorical.severity")
-    if "max_unexpected_rate" in c:
-        cfg.categorical.max_unexpected_rate = _number(c["max_unexpected_rate"], "checks.categorical.max_unexpected_rate", 0, 1)
-    if c.get("columns") is not None:
-        cfg.categorical.columns = _str_list(c["columns"], "checks.categorical.columns")
-
-    d = _mapping(checks.get("duplicates"), "checks.duplicates", {"severity", "max_duplicate_rate", "columns"})
-    if "severity" in d:
-        cfg.duplicates.severity = _severity(d["severity"], "checks.duplicates.severity")
-    if "max_duplicate_rate" in d:
-        cfg.duplicates.max_duplicate_rate = _number(d["max_duplicate_rate"], "checks.duplicates.max_duplicate_rate", 0, 1)
-    if d.get("columns") is not None:
-        cfg.duplicates.columns = _str_list(d["columns"], "checks.duplicates.columns")
-
-    t = _mapping(checks.get("distribution"), "checks.distribution",
-                 {"severity", "psi_threshold", "max_mean_shift_std", "columns"})
-    if "severity" in t:
-        cfg.distribution.severity = _severity(t["severity"], "checks.distribution.severity")
-    if "psi_threshold" in t:
-        cfg.distribution.psi_threshold = _number(t["psi_threshold"], "checks.distribution.psi_threshold", 0)
-    if "max_mean_shift_std" in t:
-        cfg.distribution.max_mean_shift_std = _number(t["max_mean_shift_std"], "checks.distribution.max_mean_shift_std", 0)
-    if t.get("columns") is not None:
-        cfg.distribution.columns = _str_list(t["columns"], "checks.distribution.columns")
+    cfg = Config()
+    _apply(cfg, top, "", TOP)
+    checks = _mapping(top.get("checks"), "checks", {p.split(".")[1] for p in SECTIONS if p.startswith("checks.")})
+    for path, (attr, spec) in SECTIONS.items():
+        parent, _, name = path.rpartition(".")
+        raw_section = (checks if parent else top).get(name)
+        _apply(getattr(cfg, attr), _mapping(raw_section, path, spec), path, spec)
 
     cons = top.get("consumers")
-    if cons is not None:
-        if not isinstance(cons, dict):
-            _fail("'consumers' must be a mapping of consumer name -> definition")
-        for name, spec in cons.items():
-            p = f"consumers.{name}"
-            spec = _mapping(spec, p, {"type", "columns", "owner", "description"})
-            if "columns" not in spec:
-                _fail(f"'{p}.columns' is required")
-            cfg.consumers.append(Consumer(
-                name=str(name),
-                type=_str(spec.get("type", "other"), f"{p}.type"),
-                columns=_str_list(spec["columns"], f"{p}.columns"),
-                owner=str(spec.get("owner", "")),
-                description=str(spec.get("description", "")),
-            ))
-
-    rep = _mapping(top.get("report"), "report", {"markdown", "max_examples", "show_values"})
-    if "markdown" in rep:
-        cfg.report.markdown = None if rep["markdown"] is None else _str(rep["markdown"], "report.markdown")
-    if "max_examples" in rep:
-        cfg.report.max_examples = _int(rep["max_examples"], "report.max_examples")
-    if "show_values" in rep:
-        cfg.report.show_values = _bool(rep["show_values"], "report.show_values")
-
-    dis = _mapping(top.get("discovery"), "discovery", {"enabled", "root", "scope", "exclude"})
-    if "enabled" in dis:
-        cfg.discovery.enabled = _bool(dis["enabled"], "discovery.enabled")
-    if "root" in dis:
-        cfg.discovery.root = _str(dis["root"], "discovery.root")
-    if "scope" in dis:
-        if dis["scope"] not in ("readers", "all"):
-            _fail(f"'discovery.scope' must be 'readers' or 'all', got {dis['scope']!r}")
-        cfg.discovery.scope = dis["scope"]
-    if dis.get("exclude") is not None:
-        cfg.discovery.exclude = _str_list(dis["exclude"], "discovery.exclude")
-
-    ai = _mapping(top.get("ai"), "ai", {"enabled", "model", "api_key_env"})
-    if "enabled" in ai:
-        cfg.ai.enabled = _bool(ai["enabled"], "ai.enabled")
-    if "model" in ai:
-        cfg.ai.model = _str(ai["model"], "ai.model")
-    if "api_key_env" in ai:
-        cfg.ai.api_key_env = _str(ai["api_key_env"], "ai.api_key_env")
+    if cons is not None and not isinstance(cons, dict):
+        _fail("'consumers' must be a mapping of consumer name -> definition")
+    for name, spec in (cons or {}).items():
+        p = f"consumers.{name}"
+        spec = _mapping(spec, p, {"type", "columns", "owner", "description"})
+        if "columns" not in spec:
+            _fail(f"'{p}.columns' is required")
+        cfg.consumers.append(Consumer(name=str(name), type=_str(spec.get("type", "other"), f"{p}.type"),
+                                      columns=_str_list(spec["columns"], f"{p}.columns"),
+                                      owner=str(spec.get("owner", "")), description=str(spec.get("description", ""))))
     return cfg
 
 

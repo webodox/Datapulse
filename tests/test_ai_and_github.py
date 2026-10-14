@@ -7,6 +7,7 @@ from datapulse import ai, github
 from datapulse.checks import run_checks
 from datapulse.errors import DataPulseError
 from datapulse.profile import profile_dataframe
+from fake_claude import FakeClaude, text
 
 SECRET = "ZZ-SECRET-VALUE-123"
 
@@ -38,28 +39,45 @@ def test_without_api_key_deterministic_explanations_remain(baseline, cfg, df, mo
 
 def test_ai_explanations_are_attached_and_labelled(baseline, cfg, df, monkeypatch):
     monkeypatch.setenv(cfg.ai.api_key_env, "k")
-    seen = {}
-
-    def fake_post(url, headers, payload, timeout=45):
-        seen["body"] = json.dumps(payload)
-        text = json.dumps({"explanations": [{"index": 0, "text": "Likely a failed join."}]})
-        return {"content": [{"type": "text", "text": "Sure: " + text}]}
-
-    monkeypatch.setattr(ai, "_post", fake_post)
+    fake = FakeClaude([text(json.dumps({"explanations": [{"index": 0, "text": "Likely a failed join."}]}))])
+    monkeypatch.setattr(ai, "get_client", lambda cfg: fake)
     report = report_with_secret(baseline, cfg, df)
     assert "AI explanations added" in ai.explain_issues(report, cfg)
     assert report.issues[0].ai_explanation == "Likely a failed join."
-    assert SECRET not in seen["body"]
+    assert SECRET not in fake.sent() and fake.calls[0]["fallbacks"] == "default"
     from datapulse.report import render_markdown
     assert "AI-generated explanation" in render_markdown(report)
 
 
 def test_ai_failure_falls_back_gracefully(baseline, cfg, df, monkeypatch):
     monkeypatch.setenv(cfg.ai.api_key_env, "k")
-    monkeypatch.setattr(ai, "_post", lambda *a, **k: (_ for _ in ()).throw(DataPulseError("boom")))
+    monkeypatch.setattr(ai, "get_client", lambda cfg: FakeClaude([text("not json")]))
     report = report_with_secret(baseline, cfg, df)
     assert "unavailable" in ai.explain_issues(report, cfg)
     assert all(i.ai_explanation is None for i in report.issues)
+
+
+def test_overview_payload_groups_issues_and_sends_no_values(baseline, cfg, df):
+    from datapulse.report import render_json
+    doc = json.loads(render_json(report_with_secret(baseline, cfg, df)))
+    payload = ai.build_overview_payload(doc)
+    assert payload["issue_count"] == len(doc["issues"])
+    assert sum(g["count"] for g in payload["groups"]) == len(doc["issues"])
+    assert payload["worst_issues"][0]["severity"] == "critical"
+    sent = json.dumps(payload)
+    assert "ZZ-SECRET" not in sent and "C0001" not in sent and '"examples"' not in sent
+
+
+def test_overview_is_summarised_and_trimmed(baseline, cfg, df, monkeypatch):
+    from datapulse.report import render_json
+    doc = json.loads(render_json(report_with_secret(baseline, cfg, df)))
+    reply = {"summary": " Mostly one problem. ", "focus": [{"title": f"t{n}", "detail": "d"} for n in range(5)]}
+    fake = FakeClaude([text(json.dumps(reply))])
+    overview = ai.summarize_run(doc, cfg, client=fake)
+    assert overview["summary"] == "Mostly one problem." and [f["title"] for f in overview["focus"]] == ["t0", "t1", "t2"]
+    assert SECRET not in fake.sent()
+    with pytest.raises(DataPulseError, match="malformed"):
+        ai.summarize_run(doc, cfg, client=FakeClaude([text("not json")]))
 
 
 def test_pr_comment_is_created_then_updated(monkeypatch):
@@ -99,3 +117,20 @@ def test_comment_command_uses_event_context(tmp_path, monkeypatch, runner):
     assert r.exit_code == 0 and got == {"repo": "o/r", "pr": 42, "token": "t"}
     monkeypatch.delenv("GITHUB_TOKEN")
     assert runner.invoke(app, ["comment", str(report)]).exit_code == 2
+
+
+def test_workspace_header_is_sent_only_when_configured(cfg, monkeypatch):
+    monkeypatch.setenv(cfg.ai.api_key_env, "k")
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    assert "anthropic-workspace-id" not in ai.get_client(cfg).default_headers
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_123")
+    assert ai.get_client(cfg).default_headers["anthropic-workspace-id"] == "wrkspc_123"
+
+
+def test_pasted_key_whitespace_is_trimmed(cfg, monkeypatch):
+    """A key pasted with a trailing newline used to fail every request as "Connection error"."""
+    monkeypatch.setenv(cfg.ai.api_key_env, "  sk-ant-test\r\n")
+    assert ai.get_api_key(cfg) == "sk-ant-test"
+    assert ai.get_client(cfg).api_key == "sk-ant-test"
+    monkeypatch.setenv(cfg.ai.api_key_env, " \n")
+    assert ai.get_api_key(cfg) is None  # whitespace only counts as "not set"
