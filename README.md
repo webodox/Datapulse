@@ -1,416 +1,210 @@
 # DataPulse
 
-**Unify data from any database into one clean, trusted table.** Every company keeps the same kind of data in many
-places: a warehouse in PostgreSQL, a store system in MySQL, spreadsheets and documents from partners. Each one names
-columns differently, uses other units and formats, and drifts over time. DataPulse connects to every source, uses AI
-to convert each one to your standard format, checks the combined result, and writes it into your own database. Data
-that fails its checks is held back, so it never breaks a dashboard, service or ML model.
+**Unify data from any database into one clean, trusted table, and block bad data before it breaks a dashboard or model.**
 
-**Live demo:** https://datapulse-production-743a.up.railway.app (invite-only sign-in with Auth0).
+[![tests](https://github.com/webodox/Datapulse/actions/workflows/tests.yml/badge.svg)](https://github.com/webodox/Datapulse/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-TypeScript-61DAFB?logo=react&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-How it works:
+[Live demo](https://datapulse-production-743a.up.railway.app) (invite-only sign-in via Auth0) ·
+[Quick start](#quick-start) · [Architecture](#architecture) · [Pipeline](#pipeline)
 
-1. **Connect your sources**: any database by its connection URL, an uploaded file or document, a link, Google
-   Drive, a REST API or a web page.
-2. **Pick the standard**: one source's format (columns, types, units) becomes the format everything is converted to.
-3. **AI maps the others to it**: Claude proposes each conversion (renames, cents to dollars, numbers stored as text,
-   spellings) with a reason for every step. A person approves it once; after that it replays without AI.
-4. **Unify**: all sources are pulled, converted, combined and checked, then sent to your database.
+---
 
-What checks the data:
+## The problem
 
-- **Rules** (schema, nulls, row counts, duplicates, categories, distributions) run offline and deterministically.
-- **An ML drift model** learns to tell new rows from trusted rows and names the columns that changed, including
-  shifts in how columns relate to each other that no single-column rule can see. Runs locally, no API key.
-- **An AI overview** on every failed check says what went wrong and what to look at first.
-- **AI agents with tools** (Claude) map sources, triage failures and repair data, using a fixed set of safe operations.
-- **Auth0 sign-in** keeps it invite-only: Auth0 verifies who someone is, and only people the admin adds get in.
+Companies keep the same kind of data in many places: a warehouse in PostgreSQL, a store system in MySQL, spreadsheets
+and PDFs from partners. Each source names columns differently, stores amounts in different units (cents vs. dollars),
+formats values its own way, and drifts over time. Teams spend hours hand-writing mapping scripts, and a silent schema
+or distribution change still reaches dashboards and ML models.
 
-## Built with
+## The solution
 
-| Part | Technology |
+DataPulse connects to each source, uses **Claude** to propose how to convert it to your standard format, validates
+the combined result with **deterministic rules and a local ML drift model**, and writes it to your own database.
+**Data that fails its checks is held back and never written.**
+
+## Highlights
+
+| Capability | What it does |
 |---|---|
-| AI | Claude (Anthropic API) with tool use: mapping, triage and repair agents, AI overview, rules assistant |
-| ML | scikit-learn random forest drift model (runs locally) |
-| Backend | Python, FastAPI, pandas, SQLAlchemy, SQLite for app data |
-| Databases | PostgreSQL, MySQL / MariaDB, SQL Server, MongoDB, SQLite and any SQLAlchemy database |
+| **Multi-source ingestion** | PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB, any SQLAlchemy database, CSV/Excel/JSON/Parquet, PDFs and Word docs, REST APIs, Google Drive/Sheets, public links and web pages. |
+| **AI schema mapping** | Claude proposes renames, unit conversions, text-to-number casts and spelling fixes, each with a reason. A human approves once, then the recipe **replays with no AI call**. |
+| **Layered data checks** | Schema, nulls, row counts, duplicates, categories and distributions run offline and deterministically. |
+| **ML drift detection** | A random forest tries to tell new rows from trusted rows. Its out-of-bag ROC AUC is the drift score, and feature importance names the columns that changed. It catches multi-column shifts that per-column rules miss. |
+| **Triage and repair agents** | Claude agents with read-only tools triage failures (block, investigate or ship). A repair agent fixes a *copy* of the data using a fixed set of safe operations and re-runs every check to prove it worked. |
+| **Safe by design** | Quality gate before writes, atomic SQL loads, read-only source queries, secrets kept server-side, and only aggregate statistics ever sent to the LLM. |
+| **Polyglot impact analysis** | `datapulse scan` finds which files, in 16 languages, read a dataset and reference its columns, so reports say what a data change may break. |
+| **CI/CD gate** | A composite GitHub Action checks data files in pull requests and compares them against the *base branch's* baseline and rules, so a PR can't loosen its own thresholds. |
+| **Ships three ways** | Web dashboard + REST API, CLI, or GitHub Action, deployable with Docker, as a single cloud container, or as a standalone binary with no Python needed. |
+
+## Pipeline
+
+```mermaid
+flowchart LR
+    A[Connect sources<br/>DBs, files, docs, APIs, links] --> B[Pick one source<br/>as the standard]
+    B --> C[AI proposes mapping<br/>per source]
+    C --> D{Human<br/>approves?}
+    D -- yes, once --> E[Saved recipe<br/>replays with no AI]
+    E --> F[Pull + transform<br/>all sources]
+    F --> G[Combine into one table<br/>with _source column]
+    G --> H{Quality gate<br/>rules + ML drift}
+    H -- pass --> I[(Write to your database<br/>replace or append)]
+    H -- fail --> J[Held back]
+    J --> K[AI overview + triage]
+    K --> L[Repair agent fixes a copy<br/>and re-checks]
+    L --> H
+```
+
+1. **Connect sources** by connection URL, upload, link, Google Drive, REST API or web page.
+2. **Pick the standard.** One source's columns, types and value scales become the baseline.
+3. **Map the others.** Columns whose names match are mapped automatically, and Claude proposes the rest from
+   statistics only. A person reviews and approves.
+4. **Unify.** Every pull replays the approved recipe, validates the result, and combines sources into one table. If a
+   source changes shape so a step no longer applies, the run says so instead of guessing.
+5. **Gate and deliver.** Passing data is written to your destination table in a single transaction. Failing data is
+   held back with an AI overview of what went wrong and where to look first.
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Client
+        UI[React + TypeScript dashboard]
+        CLI[datapulse CLI]
+        GHA[GitHub Action]
+    end
+
+    subgraph Server["FastAPI server"]
+        API[REST API + Auth0 / password auth]
+        UNI[Unifier<br/>map, extract, replay]
+        CHK[Check engine<br/>rules + ML drift]
+        AG[AI agents<br/>mapping, triage, repair]
+    end
+
+    subgraph Storage
+        DB[(SQLite<br/>accounts, projects,<br/>baselines, runs)]
+    end
+
+    subgraph Sources
+        S1[PostgreSQL / MySQL / SQL Server]
+        S2[MongoDB]
+        S3[Files, PDFs, Word]
+        S4[REST, Drive, links, web]
+    end
+
+    subgraph Destinations
+        D1[Your SQL database]
+        D2[Your MongoDB]
+    end
+
+    LLM[Claude / Anthropic API<br/>statistics only, never raw rows]
+
+    UI --> API
+    CLI --> CHK
+    GHA --> CLI
+    API --> UNI
+    API --> CHK
+    API --> DB
+    UNI --> Sources
+    UNI --> AG
+    CHK --> AG
+    AG -.-> LLM
+    UNI --> CHK
+    CHK -->|passed| Destinations
+```
+
+**Design decisions worth noting**
+
+- **AI proposes, rules decide.** The LLM suggests mappings and explanations, but a pass/fail verdict only comes from
+  deterministic checks and the local ML model. AI output never changes a result.
+- **Replay without AI.** An approved mapping becomes a stored recipe, so production loads are reproducible, cheap and
+  not dependent on an LLM being reachable.
+- **Constrained agents.** Agents can only call a fixed set of safe operations (rename, rescale, convert to numbers,
+  deduplicate, fill or drop empties, standardize spellings). They never execute arbitrary code.
+- **Privacy first.** Only column names and aggregate statistics go to the API. Tests enforce that raw rows and
+  category values are never sent.
+- **Plug-in connectors.** A new source type is one file in `src/datapulse/sources/` with a `@register` decorator, and
+  it appears in the dashboard automatically.
+- **Core library, thin surfaces.** The CLI, REST API and GitHub Action all run the same check engine and produce the
+  same JSON report.
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.10+, FastAPI, pandas, NumPy, SQLAlchemy, Typer, Rich |
+| AI | Claude (Anthropic API) with tool use |
+| ML | scikit-learn random forest drift model, runs locally with no API key |
 | Frontend | React, TypeScript, Vite |
-| Sign-in | Auth0 (OpenID Connect with PKCE) |
-| Hosting | Docker on Railway |
+| Data stores | SQLite for app data. PostgreSQL, MySQL/MariaDB, SQL Server and MongoDB as sources and destinations |
+| Auth | Auth0 (OpenID Connect with PKCE) or built-in scrypt-hashed passwords, with HttpOnly session cookies |
+| DevOps | Docker, Docker Compose, GitHub Actions, PyInstaller standalone binary, Railway |
+| Testing | pytest (180+ tests across checks, connectors, server, auth, CLI and the GitHub Action) |
 
-## AI and ML features
+## Quick start
 
-| Feature | What it takes off your plate | Where | Needs |
-|---|---|---|---|
-| ML drift model (`ml_drift` check) | Spotting subtle or multi-column drift and pointing at the columns responsible | Dashboard (automatic), `check --reference good.csv` | nothing; runs locally |
-| AI source mapping | Converting each new data source to your standard format: renamed columns, other units, numbers stored as text, different spellings. Approved once, then replayed on every load without AI | Dashboard **Sources** tab | `ANTHROPIC_API_KEY` (name matching works without it) |
-| AI overview | On a failed check: a short summary of what went wrong and the first things to look at, written once per check from statistics only | Dashboard **Results** tab (automatic) | `ANTHROPIC_API_KEY` (a plain count-based summary without it) |
-| Triage and repair agents | Two agents in parallel. The triage agent handles the first hour of an incident (root cause, block-or-ship call, fix steps, who to tell, the message); the repair agent fixes a copy (rescales units, converts text back to numbers, removes duplicates, standardizes spellings) and re-runs every check to prove it worked | Repair: **Fix with AI** on a failed check in the dashboard **Results** tab (download the fixed file, or check it). Both: `check --triage`, `datapulse fix data.csv -o fixed.csv`, or the REST API (`/runs/{id}/investigate`) | `ANTHROPIC_API_KEY` |
-| Before/after charts | Seeing a shift instantly: each column's value ranges and empty rates, baseline vs. new file | Dashboard, on each issue | nothing |
-| Rules assistant | Writing and debugging YAML; drafts are validated and self-corrected before you see them | Dashboard **Settings** tab, `datapulse draft-rules "..."` | `ANTHROPIC_API_KEY` |
-| Issue explanations | A hedged hypothesis per issue | `check --ai`, dashboard toggle | `ANTHROPIC_API_KEY` |
-
-**How the drift model works.** It samples up to `max_rows` rows from each file and trains a random forest to
-predict which file a row came from. Its out-of-bag ROC AUC is the drift score: 0.5 means the files are
-indistinguishable, 1.0 means completely different. Above `max_auc` (default 0.7) it reports an issue naming the
-columns the model relied on (feature importance), and those columns map to your downstream consumers like any
-other issue. Identifier columns (all-unique values) and timestamps are skipped automatically, because they differ
-between any two batches; add more to `checks.ml_drift.exclude`.
-
-**How the triage agent works.** Claude gets read-only tools: `list_issues`, `get_column_stats` (baseline vs.
-current aggregates), `get_run_history` and `get_consumers`. It decides what to look at, then returns a strict JSON
-triage (verdict `block` / `investigate` / `safe_to_ship`, ranked hypotheses with confidence and evidence, actions
-with owners, who to notify, a ready-to-send message). The dashboard shows the steps it took. Its output is labelled
-AI-generated and never changes a check's pass/fail result.
-
-**How the repair agent works.** It can only use a fixed set of safe repair operations (rename, rescale, convert to
-numbers, remove duplicates, fill or drop empty values, drop a column, standardize spellings), never arbitrary code.
-It applies them one at a time to a copy and re-checks after each, and it is told not to invent data (a missing
-column or blank identifiers are left for a person). Its operations are logged and replayed onto the original to
-produce the repaired file, then every check runs again, so "9 issues -> 5" is measured. The original is never
-changed.
-
-**Privacy.** Every AI feature sends column names, aggregate statistics and issue metrics only. Raw rows, category
-values and example values are never sent; tests enforce this for each feature. The ML model never leaves your machine.
-
-**Setting the key.** CLI: `export ANTHROPIC_API_KEY=...` (PowerShell: `$env:ANTHROPIC_API_KEY="..."`). Docker:
-copy `.env.example` to `.env`, put your key in it, then `docker compose up --build`. The model is `ai.model` in
-`datapulse.yml` (default `claude-sonnet-5-5`); `DATAPULSE_AI_URL` points the client at a proxy.
-
-## Data sources and unified data
-
-This is DataPulse's main job: the same data lives in many places, each in its own format, and DataPulse turns it
-into one checked table. **Try it with sample data** creates a project with three sample databases (a warehouse, a
-store system that keeps amounts in cents, and an online shop that stores prices as text) to map and unify.
-
-The **Sources** tab (the first tab of every project) connects a project to where its data lives, so nobody
-downloads and uploads files:
-
-**Add source** offers these choices:
-
-| Choice | What you give it |
-|---|---|
-| **Database** | A connection URL. DataPulse recognises the database from it: PostgreSQL (also Supabase, Neon, Railway, RDS, Redshift), MySQL / MariaDB, Microsoft SQL Server / Azure SQL, MongoDB (also Atlas, DocumentDB, Cosmos DB), and any other database with a SQLAlchemy driver installed (Snowflake, BigQuery, Oracle, Databricks…). Then a table name, one `SELECT` query, or for MongoDB a collection (`database.collection`). |
-| **File** | An uploaded CSV, Excel, JSON or Parquet file, or a document (PDF, Word, text, Markdown, email, HTML, image). Documents are read once at upload: the AI unifier extracts their records into a table (without an API key, each document becomes one record of its text). Edit the source to upload a newer version. |
-| **Google Drive** | A file shared as "Anyone with the link can view": data files and documents alike. |
-| **Link** | A public `https://` link to a data file or document, including Google Sheets share links. |
-| **REST API** | Any JSON API URL, with optional headers (kept on the server) and the path to the rows (found automatically if empty). Nested fields become columns. |
-| **Web page** | A public page: its address, title and text become one row. |
-
-File, Link, REST API and Web page have **Use test data**, which fills the form with a public example so you can try
-a source without your own credentials.
-
-**How unifying works.** One source is the *standard*: its format (columns, types, value scales) becomes the
-project's baseline. Every other source is mapped onto it once. Columns whose names match apart from case and
-punctuation are mapped automatically; the AI proposes the rest (renames, unit changes such as cents to dollars,
-numbers stored as text, capitalisation) from statistics only, using the same safe operations as the repair agent.
-A person reviews the steps and approves them. From then on every pull replays that recipe with no AI, checks the
-result, and **Unify** combines all sources into one table (with a `_source` column) you can download. If a source
-changes shape so a step no longer applies, the run says so instead of guessing.
-
-**Sending unified data to your own database.** Under *Send unified data to* on the Sources tab, add a destination:
-a connection URL (PostgreSQL/Supabase, MySQL, SQL Server, MongoDB, or any SQLAlchemy database), one table name, and
-whether each unify **replaces** the table's contents or **adds** its rows. Every Unify then writes the result
-there automatically (SQL writes are one transaction: all rows or none), and the report says what was sent. Data that
-fails its checks is **held back** and never written. Only the named table is ever touched, and it is created on
-the first send. The database user needs permission to write it.
-
-**Safety.** Connection URLs and passwords stay in the server's database and are never sent back to the browser or
-shown in error messages. Queries are read-only: a table name becomes `SELECT * FROM table`, anything else must be
-one `SELECT` query, and it runs in a transaction that is rolled back (marked read-only on PostgreSQL). Use a
-read-only database user anyway. Links must be public `https://` addresses. SQLite files must sit in the folder
-named by `DATAPULSE_SQLITE_DIR`. At most `DATAPULSE_MAX_SOURCE_ROWS` rows (default 200,000) are read per pull.
-
-**Adding a source type** is one file in `src/datapulse/sources/`: a class with the `fields` its form needs, a
-`test()` and a `fetch()` that returns a table, decorated with `@register`. It appears in the dashboard
-automatically. See `link.py` for the smallest example and `base.py` for the contract. The drivers install with
-`pip install -e ".[sources]"` (the Docker images include them).
-
-## Recognizing projects in any language
-
-DataPulse does not assume a Python project. `datapulse scan` and `datapulse check --discover` recognize the
-ecosystems and source languages in a repository and find the code that reads your data file and references its
-columns, so reports can say *which files* a data change may break, whatever language they are written in.
+### Docker (recommended)
 
 ```bash
-datapulse scan examples/data/orders.csv --root examples/polyglot           # what reads this dataset?
-datapulse scan examples/data/orders.csv --root examples/polyglot -o consumers.yml   # reviewable consumers YAML
+git clone https://github.com/webodox/Datapulse.git
+cd Datapulse
+cp .env.example .env          # optional: add ANTHROPIC_API_KEY and Auth0 values
+docker compose up --build
+```
+
+- Dashboard: http://localhost:8080
+- API docs (OpenAPI): http://localhost:8000/docs
+
+The first person to sign in becomes the admin and can add teammates. In the dashboard, click
+**Try it with sample data** to get three sample databases (a warehouse, a store system that keeps amounts in cents,
+and a shop that stores prices as text) ready to map and unify.
+
+### Without Docker (Python 3.10+, Node.js 20+)
+
+```bash
+pip install -e ".[web,sources]"
+uvicorn server.app:app --reload --port 8000
+
+cd web && npm install && npm run dev      # http://localhost:5173
+```
+
+### CLI
+
+```bash
+pip install -e ".[dev]"
 
 datapulse baseline examples/data/orders.csv -c examples/datapulse.yml
-datapulse check examples/data/orders_drifted.csv -c examples/datapulse.yml \
-  --discover --scan-root examples/polyglot
+datapulse check examples/data/orders_drifted.csv -c examples/datapulse.yml
 ```
 
-| Recognized | How |
+Exit codes: `0` passed, `1` issues found, `2` bad input. Run `datapulse --help` for every command
+(`baseline`, `check`, `scan`, `suggest`, `draft-rules`, `fix`, ...).
+
+AI features need `ANTHROPIC_API_KEY`. Everything else, including the ML drift model, works without it.
+
+## Data checks
+
+| Check | What it catches |
 |---|---|
-| **Languages** (by file extension) | Python, Jupyter notebooks, JavaScript, TypeScript, Java, Kotlin, Scala, Go, Rust, Ruby, R, C#, PHP, SQL, Julia, Swift |
-| **Ecosystems** (by manifest file) | Node.js, TypeScript, Go modules, Cargo, Maven, Gradle, sbt, Bundler, Composer, pyproject/requirements, Julia, SwiftPM, R, .NET, dbt |
+| `schema` | Added, removed or retyped columns |
+| `row_count` | Unexpected volume changes |
+| `null_rate` | Columns that suddenly go empty |
+| `categorical` | New or missing category values |
+| `duplicates` | Duplicate keys and abnormal whole-row duplicate rates |
+| `distribution` | Shifted value ranges, such as dollars becoming cents |
+| `ml_drift` | Subtle and multi-column drift, with the responsible columns named |
 
-How it finds things (plain text search, no parsing):
-1. A file is a **reader** if it mentions the data file's name or path (or, for SQL, the table name = file stem).
-   Both the file being checked and the file the baseline was built from are searched for.
-2. In readers, a column is **referenced** when it appears as a quoted string (`"status"`), an attribute
-   (`row.status`, `df$status`, `:status` in Ruby), a bare word in SQL, or a camelCase/PascalCase spelling
-   (`customer_id` -> `customerId`, `CustomerId`, `getCustomerId()`) in Java, Go, C#, JS and similar.
-3. Excluded by default: dot-directories, `node_modules`, `venv`, `target`, `build`, `dist`, `vendor`, `obj`.
-   Add more with `--exclude` or `discovery.exclude`. `--scope all` also reports non-reader files that match.
-
-**These are leads, not facts.** The reports label them "detected by text search; heuristic, not verified". It
-cannot follow data passed between modules, and misses dynamically built column names (`row[name]`). Generic
-names (`id`, `status`) can match unrelated code. `scan -o` writes suggested `consumers:` to a **new** file and
-never edits your `datapulse.yml`. Configuration lives in the `discovery:` section of `datapulse.yml`.
-
-## Web dashboard and REST API
-
-The same checks also run as a small self-hosted service: a React dashboard plus a FastAPI server that
-stores projects, baselines and run history in SQLite. A project's rules are a normal `datapulse.yml`,
-validated exactly like the CLI's, and each run returns the same JSON report as `datapulse check --json`.
-
-```bash
-docker compose up --build        # dashboard: http://localhost:8080   API docs: http://localhost:8000/docs
-```
-
-Without Docker (Python 3.10+, Node.js 20+):
-
-```bash
-pip install -e ".[web]"
-uvicorn server.app:app --reload --port 8000
-cd web && npm install && npm run dev    # http://localhost:5173 (proxies /api to port 8000)
-```
-
-In the dashboard: create a project (or **Try it with sample data**), add your sources, pick one as the standard, map
-the others and click **Unify sources**. To check a single file against the standard without adding it as a source,
-use **Quick check a file**; the check starts as soon as the file lands (CSV, JSON, JSONL/NDJSON or Parquet, up to
-25 MB). Each project has three tabs:
-
-| Tab | What's there |
-|---|---|
-| **Sources** | Connect sources, pick the standard, map, unify, and send the result to your database; quick-check a file |
-| **Results** | Every check (pulls, unifies, quick checks) with its report: an AI overview, **Fix with AI** (the repair agent fixes a copy and you can re-check it), the issues split into blocking and not blocking, before/after charts, and an **Open / Resolved** status |
-| **Settings** | The standard format (column profile; replace it with a file after an intentional change) and the rules: the project's `datapulse.yml`, the plain-English rules assistant and suggestions to copy from |
-
-**Sending data from any language.** Creating a project through the API returns an API key once (only its hash is stored); the dashboard doesn't show it.
-Any service that can make an HTTP request can send rows:
-
-```bash
-curl -X POST http://localhost:8000/api/projects/PROJECT_ID/ingest \
-  -H 'Content-Type: application/json' -H 'X-DataPulse-Key: PROJECT_API_KEY' \
-  -d '{"dataset_name": "orders", "role": "candidate",
-       "rows": [{"order_id": 1, "customer_id": "C0001", "amount": 22.5, "status": "pending"}]}'
-```
-
-Send `"role": "baseline"` first (each re-baseline bumps `baseline_version`), then `candidate` batches; each
-request takes up to 50,000 rows. The response is the JSON report (`status`, `issues`, `affected_consumers`, ...).
-`"use_ai": true` adds AI explanations when `ANTHROPIC_API_KEY` is set for the server (see `.env.example`).
-
-Data is stored under `DATAPULSE_HOME` (default `.datapulse/`): uploaded files, baselines, reports and accounts.
-
-### Running it for your team
-
-Run **one** shared copy and have everyone open it, rather than each person running their own. Everyone then sees
-the same projects, checks and AI triage, and only that one server needs an `ANTHROPIC_API_KEY`.
-
-1. On a machine everyone can reach (a server, a cloud VM, or one teammate's computer on the office network), put
-   the key in `.env` and run `docker compose up -d --build`.
-2. Open `http://<that-machine>:8080`. The first person to sign in on a fresh install becomes the **admin**.
-3. The admin adds teammates under **Account & team**: name and email (plus a temporary password when Auth0 is off).
-   With Auth0, teammates sign in with Google or email using that address.
-4. On a failed check, anyone can mark it **Open** or **Resolved**; the dashboard shows who did it and when, and who
-   ran each check.
-
-### Deploying to the cloud (one permanent link for everyone)
-
-`Dockerfile.app` packages the dashboard and the API into one container on one port, with all data (accounts,
-projects, checks) on a volume at `/data`. `railway.json` configures [Railway](https://railway.com) to use it:
-
-1. In Railway: **New Project → Deploy from GitHub repo** → pick this repository (and the branch to deploy).
-2. On the service, open **Variables** and add `ANTHROPIC_API_KEY` (your key) and `DATAPULSE_SECURE_COOKIES=1`.
-   Add `ANTHROPIC_WORKSPACE_ID` only if your key isn't tied to a workspace. For Auth0 sign-in, also add
-   `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET` (see "Sign in with Auth0" below).
-3. Right-click the service → **Attach volume**, mount path `/data`. Without it, data is lost on every redeploy.
-4. **Settings → Networking → Generate Domain** (or **Custom Domain** for your own domain). Open that link; the first
-   person to sign in becomes the admin, then adds teammates under **Account & team**.
-
-Every push to the deployed branch redeploys automatically. Any other host that runs a Dockerfile and offers a
-persistent volume works the same way (Fly.io, Render with a disk, a VM with `docker run -p 80:8000 -v dp:/data`).
-
-Every `/api` route needs a signed-in user except `/api/health`, sign-in itself, and `/ingest`, which uses the
-project's API key so other services can send data. Passwords are stored as scrypt hashes; sessions are HttpOnly
-cookies that last 14 days. If the dashboard is reachable from the internet, serve it over HTTPS (for example behind
-a reverse proxy) and set `DATAPULSE_SECURE_COOKIES=1`.
-
-**Sign in with Auth0.** Set `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET` (an Auth0 *Regular Web
-Application*) and the sign-in page becomes a single **Continue with Auth0** button: Google, email or any connection
-you turn on in Auth0. In Auth0, allow `https://<your site>/api/auth/callback` as a callback URL and
-`https://<your site>` as a logout URL. Auth0 proves who someone is; DataPulse still decides who gets in: the first
-person to sign in becomes the admin, and after that only people the admin adds by email, once Auth0 has verified that
-email. Password sign-in is turned off while Auth0 is on; remove the three variables to go back to passwords.
-
-## Running it without Python
-
-DataPulse itself needs no Python in your project: it reads CSV/Parquet and YAML and adds nothing to your
-dependency tree. Choose how to run it:
-
-| You use... | Run DataPulse with | Needs on your machine |
-|---|---|---|
-| **GitHub Actions, no Python at all** | `uses: your-org/datapulse@v1` with `binary-url:` (see "Standalone executable") | nothing; a prebuilt executable is downloaded |
-| **GitHub Actions** (any language) | `uses: your-org/datapulse@v1` (see below) | nothing; the action installs itself into an isolated virtualenv |
-| **Any machine or CI, no Python** | download `datapulse-<os>-<arch>` from Releases | nothing |
-| **Any CI or laptop** | Docker image: `docker run --rm -v "$PWD":/work datapulse check data.csv` | Docker |
-| **Developers who just want the CLI** | `pipx install .` or `uvx --from . datapulse ...` | pipx or uv |
-| **A Python project** | `pip install -e ".[dev]"` | Python 3.10+ |
-| **A team that wants a dashboard / REST API** | `docker compose up --build` (see "Web dashboard and REST API") | Docker |
-
-Scripts in any language can read results from the exit code (`0` / `1` / `2`) or from the JSON report
-(`datapulse check data.csv --json report.json`; fields: `status`, `exit_code`, `counts`, `rows`, and per-issue
-`check`, `severity`, `columns`, `measured`, `suggested_explanation`, `consumers`, `code_references`; plus top-level `config`, `schema_changed`, `affected_consumers`). The schema is versioned
-(`schema_version: 1`).
-
-Examples for other stacks are in `examples/workflows/`: `node.yml`, `go.yml` (monorepo with `working-directory`),
-`java.yml`, and `docker.yml` (non-GitHub CI).
-
-## Standalone executable (no Python needed)
-
-DataPulse is built as a single executable with its own Python runtime bundled (about 180 MB, because it includes
-pandas, Parquet support and scikit-learn). Teams in Go, Node, Java, Rust, .NET, etc. can run it without installing Python.
-
-```bash
-# use a release build
-chmod +x datapulse-linux-x64 && ./datapulse-linux-x64 check data/orders.csv
-
-# or build it yourself on your OS (inside a virtualenv)
-python -m venv .venv && source .venv/bin/activate
-bash scripts/build_binary.sh            # -> dist/datapulse (dist/datapulse.exe on Windows)
-```
-
-`.github/workflows/release.yml` builds Linux, macOS (arm64 and x64) and Windows executables with SHA-256
-checksums and attaches them to each GitHub Release. Use them in Actions without Python:
-
-```yaml
-- uses: your-org/datapulse@v1
-  with:
-    data-file: data/orders.csv
-    binary-url: https://github.com/your-org/datapulse/releases/download/v0.1.0/datapulse-linux-x64
-    binary-sha256: <contents of datapulse-linux-x64.sha256>   # the step fails on a mismatch
-```
-
-Notes: the executable still needs `git` on `PATH` for `--baseline-ref` (GitHub runners have it). Builds are
-per-OS and per-architecture, and a Linux build links against the glibc of the machine that built it, so the
-release workflow builds on standard runners.
-
-## Install
-
-From a source checkout (Python 3.10+; other options in the table above):
-
-```bash
-git clone <this-repo> datapulse && cd datapulse
-python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-datapulse --version
-```
-
-In another project, any language: `pipx install /path/to/datapulse` (or `pipx install git+https://github.com/<you>/datapulse`).
-Docker: `docker build -t datapulse .` then `docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work datapulse check data/orders.csv`.
-
-## Quick start (sample data included)
-
-```bash
-# 1. Create a versioned baseline from a known-good file
-datapulse baseline examples/data/orders.csv --config examples/datapulse.yml
-
-# 2. Check the same file: passes, exit code 0
-datapulse check examples/data/orders.csv --config examples/datapulse.yml
-
-# 3. Check a drifted file: reports issues, exit code 1
-datapulse check examples/data/orders_drifted.csv --config examples/datapulse.yml
-echo $?    # 1
-
-# 4. Get reviewable rule suggestions (never edits your config)
-datapulse suggest examples/data/orders.csv --output suggested.yml
-
-# 5. Run the full test suite
-datapulse test
-```
-
-## Using it in your own project
-
-```bash
-datapulse init                          # writes a commented datapulse.yml (never overwrites without --force)
-datapulse baseline data/orders.csv      # writes .datapulse/baseline.json; commit it
-datapulse check data/orders.csv         # terminal report + datapulse-report.md
-```
-
-Re-running `datapulse baseline` after an intentional data change bumps `baseline_version` and replaces the file.
-
-## Commands
-
-| Command | Purpose |
-|---|---|
-| `datapulse init` | Write a starter `datapulse.yml`. |
-| `datapulse baseline <file> [-c CONFIG] [-o PATH]` | Profile a known-good file into a versioned baseline JSON. |
-| `datapulse check <file> [-c CONFIG] [--baseline PATH] [--baseline-ref REF] [--config-ref REF] [--markdown PATH] [--json PATH] [--discover] [--scan-root DIR] [--reference FILE] [--triage] [--ai]` | Run all checks. `--reference` (the known-good data file) adds the ML drift check; `--triage` runs the AI agent on failures. |
-| `datapulse scan <file> [--root DIR] [--scope readers\|all] [--exclude DIR] [-o FILE]` | Recognize languages in a repo and find code that reads the data file. |
-| `datapulse fix <file> -o FILE [--reference FILE]` | AI repair agent: writes a repaired copy to a **new** file and re-checks it. |
-| `datapulse draft-rules "<request>" [--data FILE] [-o FILE]` | Plain-English request -> complete, validated `datapulse.yml` (AI). Prints it or writes a **new** file. |
-| `datapulse suggest <file> [-o FILE] [--force] [--ai]` | Propose rules from the profile. Prints YAML or writes a **new** file; refuses to touch your config. |
-| `datapulse github-outputs <report.json>` | Print `status`, `issue-count`, `schema-changed`, `affected-consumers` as `key=value` lines for `$GITHUB_OUTPUT` (values are sanitized). |
-| `datapulse comment <report.md> [--repo OWNER/NAME] [--pr N]` | Create/update the PR comment (uses `GITHUB_TOKEN`). |
-| `datapulse test` | Run the DataPulse test suite (source checkout with `.[dev]`). |
-
-**Exit codes:** `0` passed · `1` issues at or above `fail_on` · `2` bad file, config, baseline, or environment.
-
-## Checks
-
-| Check (`datapulse.yml` key) | Detects | Key settings |
-|---|---|---|
-| `schema` | Missing columns, added columns, type changes | severity per kind |
-| `row_count` | Row count change vs. baseline, minimum rows | `max_change_pct`, `min_rows` |
-| `null_rate` | Null-rate increase (absolute) | `max_increase`, per-column `columns` |
-| `categorical` | Values not seen in the baseline (low-cardinality text columns) | `max_unexpected_rate`, `columns` |
-| `duplicates` | Duplicate key values or whole rows | `columns`, `max_duplicate_rate` |
-| `distribution` | Numeric shift: Population Stability Index (PSI) and mean shift in baseline std units | `psi_threshold`, `max_mean_shift_std`, `columns` |
-| `ml_drift` | Learned drift: a model separates baseline rows from new rows (needs the baseline's rows) | `max_auc`, `max_rows`, `exclude` |
-
-Severities are `critical`, `warning`, `info`, or `off`. `fail_on` (`critical` by default; also `warning`, `info`,
-`never`) decides which severity produces exit code 1.
-
-Behaviour notes:
-- A whole-number float column (what pandas produces when an integer column gains nulls) counts as `integer`, so a
-  few nulls do not look like a type change. Float to integer narrowing is not reported.
-- Categorical values are only tracked for text columns with at most `max_categories` (default 50) distinct values.
-- Duplicates by key columns are absolute; whole-row duplicates are compared with the baseline's duplicate rate.
-- Sequential identifier columns (all-unique integers) are skipped by `distribution` unless named in `columns`.
-
-See `examples/datapulse.yml` for a complete configuration.
-
-## Downstream consumers
-
-```yaml
-consumers:
-  revenue_dashboard:
-    type: dashboard
-    owner: finance-analytics
-    columns: [amount, created_at]
-```
-
-When a column fails, every consumer listing it is shown. Dataset-wide issues (row count, whole-row duplicates)
-list all consumers. Reports separate **Measured from the data** (facts) from **Possible explanation (suggested,
-not verified)**.
+Rules live in a `datapulse.yml` file (see [`examples/datapulse.yml`](examples/datapulse.yml)). You can also declare
+**downstream consumers** (dashboards, models) so a failing column lists exactly who is affected, and you can draft
+rules in plain English with `datapulse draft-rules "..."`.
 
 ## GitHub Action
 
-`action.yml` is a composite action. On pull requests it:
-
-1. fetches the target branch and reads **both the baseline and `datapulse.yml` from `origin/<base>`**, so a PR cannot pass by re-baselining its own data or by loosening its own thresholds (rule changes take effect once merged; set `config-from-base: "false"` to opt out),
-2. runs `datapulse check` on the changed file,
-3. posts or updates one PR comment (identified by a hidden marker) and writes the report to the job summary,
-4. fails the job if issues reach `fail_on`.
-
-Setup:
-
-1. Commit `datapulse.yml` and `.datapulse/baseline.json` to your default branch.
-2. Copy `examples/workflows/datapulse.yml` to `.github/workflows/datapulse.yml` and set `uses:` to the repository
-   hosting this action.
+Gate data changes in pull requests:
 
 ```yaml
 permissions:
@@ -418,55 +212,72 @@ permissions:
   pull-requests: write
 steps:
   - uses: actions/checkout@v4
-  - uses: your-org/datapulse@v1
+  - uses: webodox/Datapulse@main
     with:
       data-file: data/orders.csv
 ```
 
-Inputs: `data-file` (required), `config`, `baseline`, `baseline-ref`, `config-from-base`, `working-directory`, `discover`, `setup-python`,
-`binary-url`, `binary-sha256`, `python-version`, `comment`, `ai`, `github-token`. Outputs: `status` (`passed`/`failed`/`error`), `issue-count`, `schema-changed` (`true`/`false`), `affected-consumers` (comma-separated),
-`exit-code`, `report-markdown`, `report-json`. Use them to gate later steps:
+It compares the PR's data against the baseline and rules on the **base branch** (so a PR can't re-baseline itself
+past the gate), posts a single updating PR comment, writes a job summary, and fails the job when issues reach the
+configured severity. It runs in an isolated virtualenv, so it works in any language's repository. See
+[`action.yml`](action.yml) and [`examples/workflows/`](examples/workflows/).
 
-```yaml
-- id: dq
-  uses: your-org/datapulse@v1
-  with: { data-file: data/orders.csv }
-- if: always() && steps.dq.outputs.schema-changed == 'true'
-  run: echo "Schema changed; notify: ${{ steps.dq.outputs.affected-consumers }}"
-```
+## Security
 
-The PR comment and report start with a **Pull request impact** section (schema changes and affected consumers).
-If a ref's config is missing, the check says so and uses the working-tree config; if the ref itself was not
-fetched it fails with exit code 2 rather than silently trusting the PR.
+- Connection URLs, passwords and API headers stay on the server and are never returned to the browser or shown in
+  errors.
+- Source queries are read-only: a table name becomes `SELECT * FROM table`, anything else must be a single `SELECT`,
+  and it runs in a rolled-back transaction. SQLite paths are restricted to a configured folder, and link sources must
+  be public `https://` addresses.
+- Destination writes touch one named table and run in a single transaction: all rows or none.
+- Passwords are scrypt-hashed and sessions are HttpOnly cookies. Every API route requires sign-in except health and
+  the key-authenticated `/ingest` endpoint. Per-source row reads are capped (`DATAPULSE_MAX_SOURCE_ROWS`).
 
-The action is language-agnostic: it installs DataPulse into its own virtualenv under `$RUNNER_TEMP` (it never
-touches your project's dependencies or lockfiles), writes its reports outside your working tree, and accepts
-`working-directory` for monorepos. Set `setup-python: "false"` to use the runner's own `python3` instead of
-`actions/setup-python`, which otherwise puts a Python on `PATH` for the rest of the job.
-The default `github.token` is used; no tokens are stored. On fork PRs the token is read-only, so the comment step
-is skipped without failing the job and the report remains in the job summary.
+## Deployment
 
-## AI explanations from the CLI
+`Dockerfile.app` packages the dashboard and API into one container with data on a volume at `/data`, and
+`railway.json` configures a one-click [Railway](https://railway.com) deploy with a `/api/health` check.
 
-```bash
-export ANTHROPIC_API_KEY=...        # name configurable via ai.api_key_env
-datapulse check data.csv --ai       # or ai.enabled: true in datapulse.yml
-datapulse suggest data.csv --ai
-```
+1. Create a Railway project from this repo.
+2. Set `ANTHROPIC_API_KEY` and `DATAPULSE_SECURE_COOKIES=1` (plus the Auth0 values if you use Auth0).
+3. Attach a volume at `/data`, then generate a domain.
 
-- Sent: column names, aggregate statistics, and numeric metrics of detected issues.
-- Never sent: raw rows, category values, or example values (a test enforces this).
-- AI text is labelled "AI-generated, unverified". With no key, or if the call fails, the deterministic explanations are used.
-- `DATAPULSE_AI_URL` overrides the endpoint (for a proxy). `report.show_values: false` also hides example values from reports.
+Any host that runs a Dockerfile and offers a persistent volume works the same way.
 
-Datasets are never uploaded anywhere by DataPulse. Baselines contain aggregates plus the category labels of
-low-cardinality text columns, so avoid baselining files where such labels are sensitive.
+### Configuration
+
+| Variable | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | Turns on the AI features |
+| `ANTHROPIC_WORKSPACE_ID` | Only if your key isn't tied to a workspace |
+| `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET` | Optional Auth0 sign-in (callback: `https://<site>/api/auth/callback`) |
+| `DATAPULSE_HOME` | Where app data is stored (default `.datapulse/`) |
+| `DATAPULSE_SECURE_COOKIES=1` | Set when served over HTTPS |
+| `DATAPULSE_MAX_SOURCE_ROWS` | Rows read per source pull (default 200,000) |
+
+## Project structure
+
+| Path | Contents |
+|---|---|
+| `src/datapulse/` | Core library and CLI: checks, ML drift, AI agents, repair, impact scan |
+| `src/datapulse/sources/` | One file per source connector |
+| `src/datapulse/unifier/` | Mapping, extraction and recipe replay that unify sources into one table |
+| `server/` | FastAPI app, auth, storage and destinations |
+| `web/` | React + TypeScript dashboard |
+| `tests/` | pytest suite |
+| `examples/` | Sample data, rules, workflows and a multi-language sample repo |
+| `action.yml`, `.github/workflows/` | GitHub Action and CI |
 
 ## Development
 
 ```bash
-pip install -e ".[dev,web]"   # web is only needed for tests/test_server.py
-datapulse test          # or: pytest -q
-cd web && npm install && npm run build   # type-check and build the dashboard
-python examples/generate_samples.py   # regenerate sample data
+pip install -e ".[dev,web]"
+pytest -q                                   # backend tests
+cd web && npm install && npm run build      # type-check and build the dashboard
 ```
+
+CI runs the test suite on Python 3.10 and 3.12 for every push and pull request.
+
+## License
+
+[MIT](LICENSE)
