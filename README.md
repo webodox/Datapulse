@@ -202,59 +202,6 @@ Rules live in a `datapulse.yml` file (see [`examples/datapulse.yml`](examples/da
 **downstream consumers** (dashboards, models) so a failing column lists exactly who is affected, and you can draft
 rules in plain English with `datapulse draft-rules "..."`.
 
-## GitHub Action
-
-Gate data changes in pull requests:
-
-```yaml
-permissions:
-  contents: read
-  pull-requests: write
-steps:
-  - uses: actions/checkout@v4
-  - uses: webodox/Datapulse@main
-    with:
-      data-file: data/orders.csv
-```
-
-It compares the PR's data against the baseline and rules on the **base branch** (so a PR can't re-baseline itself
-past the gate), posts a single updating PR comment, writes a job summary, and fails the job when issues reach the
-configured severity. It runs in an isolated virtualenv, so it works in any language's repository. See
-[`action.yml`](action.yml) and [`examples/workflows/`](examples/workflows/).
-
-## Security
-
-- Connection URLs, passwords and API headers stay on the server and are never returned to the browser or shown in
-  errors.
-- Source queries are read-only: a table name becomes `SELECT * FROM table`, anything else must be a single `SELECT`,
-  and it runs in a rolled-back transaction. SQLite paths are restricted to a configured folder, and link sources must
-  be public `https://` addresses.
-- Destination writes touch one named table and run in a single transaction: all rows or none.
-- Passwords are scrypt-hashed and sessions are HttpOnly cookies. Every API route requires sign-in except health and
-  the key-authenticated `/ingest` endpoint. Per-source row reads are capped (`DATAPULSE_MAX_SOURCE_ROWS`).
-
-## Deployment
-
-`Dockerfile.app` packages the dashboard and API into one container with data on a volume at `/data`, and
-`railway.json` configures a one-click [Railway](https://railway.com) deploy with a `/api/health` check.
-
-1. Create a Railway project from this repo.
-2. Set `ANTHROPIC_API_KEY` and `DATAPULSE_SECURE_COOKIES=1` (plus the Auth0 values if you use Auth0).
-3. Attach a volume at `/data`, then generate a domain.
-
-Any host that runs a Dockerfile and offers a persistent volume works the same way.
-
-### Configuration
-
-| Variable | Purpose |
-|---|---|
-| `ANTHROPIC_API_KEY` | Turns on the AI features |
-| `ANTHROPIC_WORKSPACE_ID` | Only if your key isn't tied to a workspace |
-| `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET` | Optional Auth0 sign-in (callback: `https://<site>/api/auth/callback`) |
-| `DATAPULSE_HOME` | Where app data is stored (default `.datapulse/`) |
-| `DATAPULSE_SECURE_COOKIES=1` | Set when served over HTTPS |
-| `DATAPULSE_MAX_SOURCE_ROWS` | Rows read per source pull (default 200,000) |
-
 ## Project structure
 
 | Path | Contents |
