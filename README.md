@@ -12,6 +12,12 @@
 [Live demo](https://datapulse-production-743a.up.railway.app) (invite-only sign-in via Auth0) ·
 [Quick start](#quick-start) · [Architecture](#architecture) · [Pipeline](#pipeline)
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=WdWs8vYXuxg" title="Watch the DataPulse demo on YouTube">
+    <img src="docs/demo-thumbnail.jpg" alt="DataPulse demo video" width="720">
+  </a>
+</p>
+
 ---
 
 ## The problem
