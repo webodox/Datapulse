@@ -1,0 +1,172 @@
+{
+  "baseline_version": 1,
+  "created_at": "2026-10-10T03:46:48+00:00",
+  "datapulse_version": "0.1.0",
+  "profile": {
+    "columns": {
+      "amount": {
+        "dtype": "float64",
+        "kind": "float",
+        "null_count": 0,
+        "null_rate": 0.0,
+        "numeric": {
+          "bin_edges": [
+            27.909000000000002,
+            35.612,
+            42.099000000000004,
+            48.686,
+            54.435,
+            61.97,
+            70.732,
+            81.80400000000002,
+            98.05000000000004
+          ],
+          "bin_props": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ],
+          "max": 240.45,
+          "mean": 61.311339999999994,
+          "min": 9.58,
+          "p01": 17.1097,
+          "p25": 38.715,
+          "p50": 54.435,
+          "p75": 74.925,
+          "p99": 188.00349999999995,
+          "std": 32.90410805969977
+        },
+        "unique_count": 486
+      },
+      "country": {
+        "categories": {
+          "CA": 133,
+          "DE": 135,
+          "GB": 112,
+          "US": 120
+        },
+        "dtype": "str",
+        "kind": "string",
+        "null_count": 0,
+        "null_rate": 0.0,
+        "unique_count": 4
+      },
+      "created_at": {
+        "dtype": "str",
+        "kind": "string",
+        "null_count": 0,
+        "null_rate": 0.0,
+        "unique_count": 500
+      },
+      "customer_id": {
+        "dtype": "str",
+        "kind": "string",
+        "null_count": 0,
+        "null_rate": 0.0,
+        "unique_count": 119
+      },
+      "order_id": {
+        "dtype": "int64",
+        "kind": "integer",
+        "null_count": 0,
+        "null_rate": 0.0,
+        "numeric": {
+          "bin_edges": [
+            1049.9,
+            1099.8,
+            1149.7,
+            1199.6,
+            1249.5,
+            1299.4,
+            1349.3,
+            1399.2,
+            1449.1
+          ],
+          "bin_props": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ],
+          "max": 1499.0,
+          "mean": 1249.5,
+          "min": 1000.0,
+          "p01": 1004.99,
+          "p25": 1124.75,
+          "p50": 1249.5,
+          "p75": 1374.25,
+          "p99": 1494.01,
+          "std": 144.33727862198316
+        },
+        "unique_count": 500
+      },
+      "quantity": {
+        "dtype": "int64",
+        "kind": "integer",
+        "null_count": 0,
+        "null_rate": 0.0,
+        "numeric": {
+          "bin_edges": [
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0
+          ],
+          "bin_props": [
+            0.0,
+            0.198,
+            0.216,
+            0.158,
+            0.21,
+            0.218
+          ],
+          "max": 5.0,
+          "mean": 3.034,
+          "min": 1.0,
+          "p01": 1.0,
+          "p25": 2.0,
+          "p50": 3.0,
+          "p75": 4.0,
+          "p99": 5.0,
+          "std": 1.445283363219822
+        },
+        "unique_count": 5
+      },
+      "status": {
+        "categories": {
+          "cancelled": 51,
+          "delivered": 199,
+          "pending": 115,
+          "shipped": 135
+        },
+        "dtype": "str",
+        "kind": "string",
+        "null_count": 0,
+        "null_rate": 0.0,
+        "unique_count": 4
+      }
+    },
+    "duplicate_rows": 0,
+    "rows": 500
+  },
+  "schema_version": 1,
+  "source": {
+    "file": "examples/data/orders.csv",
+    "format": "csv",
+    "sha256": "ee23fe4de80700a8fa3133f60b5308ce23ac3f97dd8e4bd0df21d3e5d9042911"
+  }
+}
